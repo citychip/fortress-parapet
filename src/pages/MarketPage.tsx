@@ -91,10 +91,12 @@ export default function MarketPage() {
             </Card>
           )}
 
-          {/* Other fields */}
+          {/* Other scalar fields */}
           {(() => {
             const skip = new Set(['as_of','ticker','session_date','current_price','regime','dp_floor','gex_call_wall','gex_put_wall','flip_level','gamma_regime']);
-            const rest = Object.entries(intel).filter(([k]) => !skip.has(k) && intel[k] != null);
+            const rest = Object.entries(intel).filter(([k, v]) =>
+              !skip.has(k) && v != null && typeof v !== 'object'
+            );
             if (!rest.length) return null;
             return (
               <Card title="Additional Data">
@@ -102,7 +104,7 @@ export default function MarketPage() {
                   {rest.map(([k, v]: any, i) => (
                     <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <span style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase' }}>{k.replace(/_/g,' ')}</span>
-                      <span className="mono" style={{ fontSize: 13 }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                      <span className="mono" style={{ fontSize: 13 }}>{String(v)}</span>
                     </div>
                   ))}
                 </div>

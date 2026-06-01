@@ -5,10 +5,117 @@ import { TabBar } from '../components/Tabs';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import {
-  getSettings, getAlerts, addAlert, deleteAlert,
+  getSettings, updateSettings, getAlerts, addAlert, deleteAlert,
   listScripts, runScript, getIbkrStatus, triggerIbkrSync,
   getUniverse, addTicker, excludeTicker,
 } from '../lib/api';
+
+// Fields that should be masked in display
+const SENSITIVE_KEYS = new Set(['token','key','secret','password','auth_token','api_key','quantdata_auth_token','quantdata_api_key']);
+// Strategy section is Claude-only
+const CLAUDE_ONLY_SECTIONS = new Set(['strategy']);
+
+function isSensitive(k: string) {
+  return SENSITIVE_KEYS.has(k) || k.toLowerCase().includes('token') || k.toLowerCase().includes('secret');
+}
+
+function formatValue(v: any): string {
+  if (v == null) return '';
+  if (typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.join(', ');
+  return String(v);
+}
+
+function EditableSection({ section, values, onSaved }: { section: string; values: any; onSaved: () => void }) {
+  const [draft, setDraft]     = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(values).map(([k, v]) => [k, formatValue(v)]))
+  );
+  const [saving, setSaving]   = useState(false);
+  const [saved, setSaved]     = useState(false);
+  const [err, setErr]         = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+
+  const dirty = Object.entries(draft).some(([k, v]) => v !== formatValue(values[k]));
+
+  const handleSave = async () => {
+    setSaving(true); setErr(null);
+    try {
+      // coerce types back
+      const payload: Record<string, any> = {};
+      for (const [k, v] of Object.entries(draft)) {
+        const orig = values[k];
+        if (typeof orig === 'boolean') payload[k] = v === 'true';
+        else if (typeof orig === 'number') payload[k] = Number(v);
+        else if (Array.isArray(orig)) payload[k] = v.split(',').map(s => s.trim()).filter(Boolean);
+        else payload[k] = v === '' ? null : v;
+      }
+      await updateSettings(section, payload);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      onSaved();
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      {err && <div style={{ color: 'var(--red)', fontSize: 12, marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12, marginBottom: 16 }}>
+        {Object.entries(draft).map(([k, v]) => {
+          const orig = values[k];
+          const sensitive = isSensitive(k);
+          const isRevealed = revealed.has(k);
+          return (
+            <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{k}</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {typeof orig === 'boolean' ? (
+                  <select value={v} onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))} style={{ flex: 1 }}>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                ) : (
+                  <input
+                    type={sensitive && !isRevealed ? 'password' : 'text'}
+                    value={v}
+                    onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))}
+                    style={{ flex: 1, fontSize: 12 }}
+                  />
+                )}
+                {sensitive && (
+                  <button onClick={() => setRevealed(r => { const n = new Set(r); n.has(k) ? n.delete(k) : n.add(k); return n; })}
+                    style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', color: 'var(--muted)', padding: '4px 8px', fontSize: 11 }}>
+                    {isRevealed ? 'hide' : 'show'}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <button onClick={handleSave} disabled={saving || !dirty} style={{
+          background: dirty ? 'var(--accent)' : 'var(--surface2)',
+          color: dirty ? '#fff' : 'var(--muted)',
+          border: dirty ? 'none' : '1px solid var(--border2)',
+          padding: '6px 20px', fontWeight: 600,
+        }}>
+          {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save'}
+        </button>
+        {dirty && (
+          <button onClick={() => setDraft(Object.fromEntries(Object.entries(values).map(([k, v]) => [k, formatValue(v)])))}
+            style={{ background: 'none', color: 'var(--muted)', border: '1px solid var(--border2)', padding: '6px 14px' }}>
+            Reset
+          </button>
+        )}
+        {saved && <span style={{ fontSize: 12, color: 'var(--green)' }}>Changes saved</span>}
+      </div>
+    </div>
+  );
+}
 
 export default function SystemPage() {
   const [tab, setTab]         = useState('settings');
@@ -107,22 +214,39 @@ export default function SystemPage() {
       {/* SETTINGS */}
       {tab === 'settings' && settings && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {Object.entries(settings).map(([section, values]: any) => (
-            <Card key={section} title={section.toUpperCase()}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
-                {Object.entries(values).map(([k, v]: any) => (
-                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 13 }}>
-                    <span style={{ color: 'var(--muted)' }}>{k}</span>
-                    <span className="mono" style={{ color: 'var(--text)', textAlign: 'right', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {typeof v === 'boolean' ? (v ? 'true' : 'false') :
-                       Array.isArray(v) ? v.join(', ') :
-                       v == null ? '—' : String(v)}
-                    </span>
+          {Object.entries(settings).map(([section, values]: any) => {
+            const claudeOnly = CLAUDE_ONLY_SECTIONS.has(section);
+            return (
+              <Card
+                key={section}
+                title={section.toUpperCase()}
+                action={claudeOnly
+                  ? <span style={{ fontSize: 11, color: 'var(--accent)', padding: '2px 8px', background: 'rgba(99,102,241,0.1)', borderRadius: 4 }}>Edit via Claude</span>
+                  : undefined
+                }
+              >
+                {claudeOnly ? (
+                  <div>
+                    <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
+                      Strategy thresholds have portfolio-wide implications. Ask Claude to change them — e.g. "set ivr_min_entry to 15" or "update delta roll threshold to 0.40".
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
+                      {Object.entries(values).map(([k, v]: any) => (
+                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 13 }}>
+                          <span style={{ color: 'var(--muted)' }}>{k}</span>
+                          <span className="mono" style={{ color: 'var(--text)', textAlign: 'right' }}>
+                            {Array.isArray(v) ? v.join(', ') : v == null ? '—' : String(v)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </Card>
-          ))}
+                ) : (
+                  <EditableSection section={section} values={values} onSaved={load} />
+                )}
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -269,8 +393,11 @@ export default function SystemPage() {
             {!universe
               ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No universe data.</p>
               : (() => {
-                  const tickers: string[] = universe?.tickers ?? universe?.tier1 ?? universe?.universe ?? [];
-                  const excluded: string[] = universe?.excluded ?? [];
+                  // Handle both string[] and object[] (extract ticker field)
+                  const raw: any[] = universe?.tickers ?? universe?.tier1 ?? universe?.universe ?? [];
+                  const tickers: string[] = raw.map((t: any) => typeof t === 'string' ? t : (t?.ticker ?? t?.symbol ?? String(t)));
+                  const rawExcl: any[] = universe?.excluded ?? [];
+                  const excluded: string[] = rawExcl.map((t: any) => typeof t === 'string' ? t : (t?.ticker ?? t?.symbol ?? String(t)));
                   return (
                     <div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>

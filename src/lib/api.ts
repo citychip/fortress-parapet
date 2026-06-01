@@ -67,7 +67,7 @@ export const excludeTicker     = (ticker: string) =>
   req<any>('/api/universe/excluded', { method: 'POST', body: JSON.stringify({ ticker }) });
 
 // ── Scripts ──────────────────────────────────────────────────────────────────
-export const listScripts       = () => req<any>('/api/scripts');
+export const listScripts       = () => req<any>('/api/scripts/list').catch(() => req<any>('/api/scripts'));
 export const runScript         = (key: string) =>
   req<any>(`/api/scripts/${key}/run`, { method: 'POST' });
 
