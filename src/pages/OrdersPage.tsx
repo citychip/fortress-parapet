@@ -16,7 +16,9 @@ export default function OrdersPage() {
     setLoading(true); setError(null);
     try {
       const data = await getPendingOrders();
-      setOrders(data?.orders ?? data?.pending ?? (Array.isArray(data) ? data : []));
+      const all: any[] = data?.orders ?? data?.pending ?? (Array.isArray(data) ? data : []);
+      // Only show truly pending orders
+      setOrders(all.filter((o: any) => !o.status || o.status === 'pending'));
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
       setError(String(e));
@@ -42,11 +44,14 @@ export default function OrdersPage() {
   const handleDecline = async (id: string) => {
     if (!confirm('Decline this order?')) return;
     setActing(id);
+    setError(null);
     try {
       await declineOrder(id);
+      // Remove immediately from local state, then reload
+      setOrders(prev => prev.filter(o => o.id !== id));
       await load();
     } catch (e: any) {
-      setError(String(e));
+      setError(`Decline failed: ${e}`);
     } finally {
       setActing(null);
     }

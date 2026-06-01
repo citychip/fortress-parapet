@@ -44,9 +44,9 @@ export const getQuantDataReports = () => req<any>('/api/quantdata/reports');
 // ── Orders ───────────────────────────────────────────────────────────────────
 export const getPendingOrders  = () => req<any>('/api/orders/pending');
 export const approveOrder      = (id: string) =>
-  req<any>(`/api/orders/${id}/approve`, { method: 'POST' });
+  req<any>(`/api/orders/pending/${id}/approve`, { method: 'POST' });
 export const declineOrder      = (id: string) =>
-  req<any>(`/api/orders/${id}/decline`, { method: 'POST' });
+  req<any>(`/api/orders/pending/${id}`, { method: 'DELETE' });
 
 // ── Alerts ───────────────────────────────────────────────────────────────────
 export const getAlerts         = () => req<any>('/api/alerts');
