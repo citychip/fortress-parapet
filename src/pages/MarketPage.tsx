@@ -4,15 +4,16 @@ import Card from '../components/Card';
 import { TabBar } from '../components/Tabs';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getMarketIntel, getCalendar, getQuantDataReports } from '../lib/api';
+import { getMarketIntel, getCalendar, fetchEarnings, getQuantDataReports } from '../lib/api';
 
 export default function MarketPage() {
-  const [tab, setTab]       = useState('intel');
-  const [intel, setIntel]   = useState<any>(null);
-  const [cal, setCal]       = useState<any>(null);
-  const [qd, setQd]         = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]   = useState<string | null>(null);
+  const [tab, setTab]           = useState('intel');
+  const [intel, setIntel]       = useState<any>(null);
+  const [cal, setCal]           = useState<any>(null);
+  const [qd, setQd]             = useState<any>(null);
+  const [loading, setLoading]   = useState(true);
+  const [fetching, setFetching] = useState(false);
+  const [error, setError]       = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -116,35 +117,43 @@ export default function MarketPage() {
 
       {/* CALENDAR */}
       {tab === 'calendar' && (
-        <Card title="Earnings Calendar">
+        <Card title="Earnings Calendar" action={
+          <button onClick={async () => { setFetching(true); try { await fetchEarnings(); const c = await getCalendar(); setCal(c); } catch(e:any){setError(String(e));} finally{setFetching(false);} }}
+            disabled={fetching}
+            style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', color: 'var(--muted)', fontSize: 11, padding: '3px 10px' }}>
+            {fetching ? '…' : '↻ Fetch'}
+          </button>
+        }>
           {!cal ? (
-            <p style={{ color: 'var(--muted)', fontSize: 13 }}>No calendar data.</p>
+            <p style={{ color: 'var(--muted)', fontSize: 13 }}>No calendar data. Hit Fetch to load.</p>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table>
                 <thead><tr>
-                  <th>Date</th><th>Ticker</th><th>Time</th><th>Est EPS</th><th>Status</th>
+                  <th>Ticker</th><th>Next Earnings</th><th className="text-right">DTE</th><th>Status</th><th>Notes</th>
                 </tr></thead>
                 <tbody>
-                  {(cal?.events ?? cal?.earnings ?? (Array.isArray(cal) ? cal : [])).map((e: any, i: number) => (
-                    <tr key={i}>
-                      <td>{e.date ?? e.report_date ?? '—'}</td>
-                      <td style={{ fontWeight: 600 }}>{e.ticker ?? e.symbol ?? '—'}</td>
-                      <td style={{ color: 'var(--muted)', fontSize: 12 }}>{e.time ?? e.when ?? '—'}</td>
-                      <td className="mono">{e.eps_estimate != null ? `$${e.eps_estimate}` : '—'}</td>
-                      <td>
-                        {e.confirmed != null && (
-                          <span style={{
-                            fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                            background: e.confirmed ? 'rgba(34,197,94,0.1)' : 'rgba(100,116,139,0.1)',
-                            color: e.confirmed ? 'var(--green)' : 'var(--muted)',
-                          }}>
-                            {e.confirmed ? 'Confirmed' : 'Unconfirmed'}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {Object.entries(cal?.tickers ?? {})
+                    .sort(([,a]: any, [,b]: any) => (a.days_to_earnings ?? 999) - (b.days_to_earnings ?? 999))
+                    .map(([ticker, e]: any, i: number) => {
+                      const statusColor = e.status === 'blackout' ? 'var(--red)' : e.status === 'warning' ? 'var(--yellow)' : 'var(--green)';
+                      const statusBg   = e.status === 'blackout' ? 'rgba(239,68,68,0.1)' : e.status === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
+                      return (
+                        <tr key={i}>
+                          <td style={{ fontWeight: 600 }}>{ticker}</td>
+                          <td className="mono">{e.next_earnings ?? '—'}</td>
+                          <td className="text-right mono" style={{ color: (e.days_to_earnings ?? 99) < 14 ? 'var(--yellow)' : 'var(--muted)' }}>
+                            {e.days_to_earnings ?? '—'}d
+                          </td>
+                          <td>
+                            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: statusBg, color: statusColor, fontWeight: 600, textTransform: 'uppercase' }}>
+                              {e.status ?? '—'}
+                            </span>
+                          </td>
+                          <td style={{ color: 'var(--muted)', fontSize: 12 }}>{e.notes ?? '—'}</td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>

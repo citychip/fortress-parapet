@@ -201,12 +201,24 @@ export default function PortfolioPage() {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           {sector && (
             <Card title="Sector Exposure" style={{ flex: 1, minWidth: 280 }}>
-              {Object.entries(sector?.by_sector ?? sector ?? {}).map(([k, v]: any, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ color: 'var(--muted)', fontSize: 13 }}>{k}</span>
-                  <span className="mono">{typeof v === 'number' ? fmtPct(v) : JSON.stringify(v)}</span>
-                </div>
-              ))}
+              <table>
+                <thead><tr>
+                  <th>Sector</th>
+                  <th className="text-right">Notional</th>
+                  <th className="text-right">Pct</th>
+                  <th>Tickers</th>
+                </tr></thead>
+                <tbody>
+                  {(Array.isArray(sector) ? sector : sector?.sectors ?? Object.entries(sector).map(([k,v]:any)=>({sector:k,...(typeof v==='object'?v:{pct:v})}))).map((s: any, i: number) => (
+                    <tr key={i}>
+                      <td style={{ fontWeight: 600 }}>{s.sector ?? s.name ?? '—'}</td>
+                      <td className="text-right mono">{s.notional != null ? fmt$(s.notional, 0) : '—'}</td>
+                      <td className="text-right mono">{s.pct != null ? `${s.pct.toFixed(1)}%` : '—'}</td>
+                      <td style={{ color: 'var(--muted)', fontSize: 12 }}>{Array.isArray(s.tickers) ? s.tickers.join(', ') : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </Card>
           )}
           {beta && (

@@ -28,9 +28,9 @@ export const getPositions      = (aggregated = true) =>
 export const getPnl            = () => req<any>('/api/pnl');
 export const getPnlHistory     = () => req<any>('/api/pnl/history');
 export const getPortfolioBeta  = () => req<any>('/api/portfolio/beta');
-export const getSectorExposure = () => req<any>('/api/portfolio/sector');
+export const getSectorExposure = () => req<any>('/api/portfolio/sector-exposure');
 export const getCapitalEff     = () => req<any>('/api/portfolio/capital-efficiency');
-export const getForwardPnl     = () => req<any>('/api/portfolio/forward-pnl');
+export const getForwardPnl     = () => req<any>('/api/options/forward-pnl');
 export const getJournal        = () => req<any>('/api/journal');
 export const addJournalEntry   = (body: any) =>
   req<any>('/api/journal', { method: 'POST', body: JSON.stringify(body) });
@@ -38,6 +38,7 @@ export const addJournalEntry   = (body: any) =>
 // ── Market ───────────────────────────────────────────────────────────────────
 export const getMarketIntel    = () => req<any>('/api/market-intelligence');
 export const getCalendar       = () => req<any>('/api/calendar');
+export const fetchEarnings     = () => req<any>('/api/calendar/fetch-earnings', { method: 'POST' });
 export const getQuantDataReports = () => req<any>('/api/quantdata/reports');
 
 // ── Orders ───────────────────────────────────────────────────────────────────
@@ -62,18 +63,18 @@ export const updateSettings    = (section: string, data: any) =>
 // ── Universe ─────────────────────────────────────────────────────────────────
 export const getUniverse       = () => req<any>('/api/universe');
 export const addTicker         = (ticker: string) =>
-  req<any>('/api/universe/tickers', { method: 'POST', body: JSON.stringify({ ticker }) });
+  req<any>('/api/universe/add', { method: 'POST', body: JSON.stringify({ ticker }) });
 export const excludeTicker     = (ticker: string) =>
-  req<any>('/api/universe/excluded', { method: 'POST', body: JSON.stringify({ ticker }) });
+  req<any>('/api/universe/exclude', { method: 'POST', body: JSON.stringify({ ticker }) });
 
 // ── Scripts ──────────────────────────────────────────────────────────────────
-export const listScripts       = () => req<any>('/api/scripts/list').catch(() => req<any>('/api/scripts'));
+export const listScripts       = () => req<any>('/api/run/scripts');
 export const runScript         = (key: string) =>
-  req<any>(`/api/scripts/${key}/run`, { method: 'POST' });
+  req<any>(`/api/run/${key}`, { method: 'POST' });
 
 // ── Infrastructure ───────────────────────────────────────────────────────────
 export const triggerIbkrSync   = () => req<any>('/api/ibkr/sync', { method: 'POST' });
-export const retryIbkrSync     = () => req<any>('/api/ibkr/sync/retry', { method: 'POST' });
+export const retryIbkrSync     = () => req<any>('/api/ibkr/upload/retry', { method: 'POST' });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 export function fmt$(n: number | null | undefined, decimals = 0): string {
