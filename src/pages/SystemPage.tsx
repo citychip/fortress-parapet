@@ -322,30 +322,158 @@ export default function SystemPage() {
       )}
 
       {/* INFRA */}
-      {tab === 'infra' && ibkr && (
+      {tab === 'infra' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Card title="IBKR Status">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-              {[
-                { label: 'Active Backend', value: ibkr.active_backend },
-                { label: 'Account', value: ibkr.web_api?.account },
-                { label: 'Authenticated', value: String(ibkr.web_api?.session_status?.authenticated) },
-                { label: 'OPRA Subscribed', value: String(ibkr.web_api?.opra_subscribed) },
-                { label: 'Gateway URL', value: ibkr.web_api?.gateway_url },
-              ].map((r, i) => (
-                <div key={i} style={{ display: 'flex', gap: 12, fontSize: 13 }}>
-                  <span style={{ color: 'var(--muted)', minWidth: 140 }}>{r.label}</span>
-                  <span className="mono">{r.value ?? '—'}</span>
-                </div>
-              ))}
+
+          {/* Auth Mode toggle */}
+          <Card title="Auth Mode">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>
+                Switch the IBKR connection backend. <strong>iBeam</strong> uses the CP Gateway Docker container (default).
+                <strong> OAuth</strong> connects directly to IBKR via OAuth 1.0a — no Docker required.
+              </p>
+
+              {/* Pill toggle */}
+              {(() => {
+                const currentMode = settings?.security?.ibkr_auth_mode ?? 'ibeam';
+                const [switching, setSwitching] = useState(false);
+                const [switchErr, setSwitchErr] = useState<string | null>(null);
+                const [switchOk, setSwitchOk] = useState(false);
+
+                const handleSwitch = async (mode: string) => {
+                  if (mode === currentMode) return;
+                  setSwitching(true); setSwitchErr(null); setSwitchOk(false);
+                  try {
+                    await updateSettings('security', { ibkr_auth_mode: mode });
+                    setSwitchOk(true);
+                    setTimeout(() => setSwitchOk(false), 2000);
+                    await load();
+                  } catch (e: any) {
+                    setSwitchErr(String(e));
+                  } finally {
+                    setSwitching(false);
+                  }
+                };
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', gap: 0, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border2)', width: 'fit-content' }}>
+                      {(['ibeam', 'oauth'] as const).map(mode => {
+                        const active = currentMode === mode;
+                        return (
+                          <button key={mode} onClick={() => handleSwitch(mode)} disabled={switching}
+                            style={{
+                              padding: '7px 24px', fontWeight: 600, fontSize: 13, border: 'none',
+                              background: active ? 'var(--accent)' : 'var(--surface2)',
+                              color: active ? '#fff' : 'var(--muted)',
+                              cursor: switching ? 'not-allowed' : 'pointer',
+                              borderRight: mode === 'ibeam' ? '1px solid var(--border2)' : 'none',
+                            }}>
+                            {mode === 'ibeam' ? '⚙ iBeam' : '🔑 OAuth 1.0a'}
+                            {active && <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.8 }}>● active</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {switching && <span style={{ fontSize: 12, color: 'var(--muted)' }}>Switching…</span>}
+                    {switchOk && <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ Switched — trigger a sync to apply</span>}
+                    {switchErr && <span style={{ fontSize: 12, color: 'var(--red)' }}>{switchErr}</span>}
+                  </div>
+                );
+              })()}
             </div>
-            <button onClick={handleSync} disabled={syncing} style={{
-              background: 'var(--accent)', color: '#fff',
-              padding: '6px 20px',
-            }}>
-              {syncing ? '…' : '↻ Trigger Sync'}
-            </button>
           </Card>
+
+          {/* IBKR Status */}
+          {ibkr && (
+            <Card title="IBKR Status">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+                {[
+                  { label: 'Active Backend', value: ibkr.active_backend },
+                  { label: 'Auth Mode', value: settings?.security?.ibkr_auth_mode ?? 'ibeam' },
+                  { label: 'Account', value: ibkr.web_api?.account },
+                  { label: 'Authenticated', value: String(ibkr.web_api?.session_status?.authenticated) },
+                  { label: 'OPRA Subscribed', value: String(ibkr.web_api?.opra_subscribed) },
+                  { label: 'Gateway URL', value: ibkr.web_api?.gateway_url },
+                ].map((r, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 12, fontSize: 13 }}>
+                    <span style={{ color: 'var(--muted)', minWidth: 140 }}>{r.label}</span>
+                    <span className="mono">{r.value ?? '—'}</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={handleSync} disabled={syncing} style={{
+                background: 'var(--accent)', color: '#fff',
+                padding: '6px 20px',
+              }}>
+                {syncing ? '…' : '↻ Trigger Sync'}
+              </button>
+            </Card>
+          )}
+
+          {/* OAuth probe status */}
+          {ibkr?.oauth && (
+            <Card title="OAuth 1.0a Status">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+                {[
+                  { label: 'Consumer Key', value: ibkr.oauth.consumer_key },
+                  { label: 'Keys Dir', value: ibkr.oauth.keys_dir },
+                  { label: 'Configured', value: String(ibkr.oauth.configured) },
+                  { label: 'Connected', value: String(ibkr.oauth.connected) },
+                  { label: 'Established', value: String(ibkr.oauth.established) },
+                  { label: 'Error', value: ibkr.oauth.error ?? '—' },
+                ].map((r, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 12, fontSize: 13 }}>
+                    <span style={{ color: 'var(--muted)', minWidth: 140 }}>{r.label}</span>
+                    <span className="mono" style={{
+                      color: r.label === 'Error' && ibkr.oauth.error ? 'var(--red)'
+                           : r.label === 'Established' && ibkr.oauth.established ? 'var(--green)'
+                           : 'var(--text)',
+                    }}>{r.value ?? '—'}</span>
+                  </div>
+                ))}
+              </div>
+              {/* Test OAuth Sync button — switches to oauth, triggers sync, switches back if it fails */}
+              {(() => {
+                const [testing, setTesting] = useState(false);
+                const [testResult, setTestResult] = useState<string | null>(null);
+
+                const handleTestOAuth = async () => {
+                  setTesting(true); setTestResult(null);
+                  try {
+                    await updateSettings('security', { ibkr_auth_mode: 'oauth' });
+                    await triggerIbkrSync();
+                    setTestResult('✓ OAuth sync succeeded');
+                    await load();
+                  } catch (e: any) {
+                    setTestResult('✗ ' + String(e));
+                    // Revert to ibeam on failure
+                    try { await updateSettings('security', { ibkr_auth_mode: 'ibeam' }); await load(); } catch {}
+                  } finally {
+                    setTesting(false);
+                  }
+                };
+
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <button onClick={handleTestOAuth} disabled={testing} style={{
+                      background: 'var(--surface2)', border: '1px solid var(--border2)',
+                      color: 'var(--text)', padding: '6px 16px', fontSize: 13,
+                    }}>
+                      {testing ? '…testing' : '⚡ Test OAuth Sync'}
+                    </button>
+                    {testResult && (
+                      <span style={{
+                        fontSize: 12, fontWeight: 600,
+                        color: testResult.startsWith('✓') ? 'var(--green)' : 'var(--red)',
+                      }}>{testResult}</span>
+                    )}
+                  </div>
+                );
+              })()}
+            </Card>
+          )}
+
         </div>
       )}
 
