@@ -70,7 +70,7 @@ export default function MarketPage() {
           </div>
 
           {/* Regime signals */}
-          {intel.regime?.signals?.length > 0 && (
+          {Array.isArray(intel.regime?.signals) && intel.regime.signals.length > 0 && (
             <Card title="Regime Signals">
               {intel.regime.signals.map((s: any, i: number) => (
                 <div key={i} style={{

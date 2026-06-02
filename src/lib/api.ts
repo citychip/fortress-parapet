@@ -39,7 +39,7 @@ export const addJournalEntry   = (body: any) =>
 export const getMarketIntel    = () => req<any>('/api/market-intelligence');
 export const getCalendar       = () => req<any>('/api/calendar');
 export const fetchEarnings     = () => req<any>('/api/calendar/fetch-earnings', { method: 'POST' });
-export const getQuantDataReports = () => req<any>('/api/quantdata/reports');
+export const getQuantDataReports = () => req<any>('/api/qd/tools');
 
 // ── Orders ───────────────────────────────────────────────────────────────────
 export const getPendingOrders  = () => req<any>('/api/orders/pending');
