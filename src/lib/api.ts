@@ -58,7 +58,7 @@ export const deleteAlert       = (id: string) =>
 // ── Settings ─────────────────────────────────────────────────────────────────
 export const getSettings       = () => req<any>('/api/settings');
 export const updateSettings    = (section: string, data: any) =>
-  req<any>(`/api/settings/${section}`, { method: 'PUT', body: JSON.stringify(data) });
+  req<any>(`/api/settings/${section}`, { method: 'PUT', body: JSON.stringify({ values: data }) });
 
 // ── Universe ─────────────────────────────────────────────────────────────────
 export const getUniverse       = () => req<any>('/api/universe');
