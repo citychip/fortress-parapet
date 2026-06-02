@@ -62,10 +62,10 @@ export const updateSettings    = (section: string, data: any) =>
 
 // ── Universe ─────────────────────────────────────────────────────────────────
 export const getUniverse       = () => req<any>('/api/universe');
-export const addTicker         = (ticker: string) =>
-  req<any>('/api/universe/add', { method: 'POST', body: JSON.stringify({ ticker }) });
+export const addTicker         = (ticker: string, tier = 'tier1') =>
+  req<any>(`/api/universe/${tier}/${ticker}`, { method: 'POST' });
 export const excludeTicker     = (ticker: string) =>
-  req<any>('/api/universe/exclude', { method: 'POST', body: JSON.stringify({ ticker }) });
+  req<any>(`/api/universe/exclude/${ticker}`, { method: 'POST' });
 
 // ── Scripts ──────────────────────────────────────────────────────────────────
 export const listScripts       = () => req<any>('/api/run/scripts');
