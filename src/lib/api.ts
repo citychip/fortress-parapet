@@ -58,7 +58,7 @@ export const deleteAlert       = (id: string) =>
 // ── Settings ─────────────────────────────────────────────────────────────────
 export const getSettings       = () => req<any>('/api/settings');
 export const updateSettings    = (section: string, data: any) =>
-  req<any>(`/api/settings/${section}`, { method: 'PATCH', body: JSON.stringify(data) });
+  req<any>(`/api/settings/${section}`, { method: 'PUT', body: JSON.stringify(data) });
 
 // ── Universe ─────────────────────────────────────────────────────────────────
 export const getUniverse       = () => req<any>('/api/universe');
@@ -101,3 +101,4 @@ export function clsN(n: number | null | undefined): string {
   if (n == null) return '';
   return n >= 0 ? 'text-green' : 'text-red';
 }
+
