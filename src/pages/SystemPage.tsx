@@ -180,9 +180,14 @@ export default function SystemPage() {
     setRunning(key);
     try {
       const result = await runScript(key);
-      const output = result?.output ?? result?.message ?? result?.result ?? 'Script completed.';
-      const ok = result?.ok !== false;
-      setScriptOutput(prev => ({ ...prev, [key]: { ok, output: String(output).slice(0, 800) } }));
+      // Backend returns {stdout, stderr, exit_code, duration_seconds}
+      const ok = (result?.exit_code ?? 0) === 0 && result?.ok !== false;
+      const stdout = result?.stdout ?? result?.output ?? result?.message ?? 'Script completed.';
+      const stderr = result?.stderr ?? '';
+      const duration = result?.duration_seconds;
+      const header = duration != null ? `[${duration.toFixed(1)}s]  exit ${result?.exit_code ?? 0}` : '';
+      const parts = [header, stdout, stderr ? `--- stderr ---\n${stderr}` : ''].filter(Boolean);
+      setScriptOutput(prev => ({ ...prev, [key]: { ok, output: parts.join('\n').trim() } }));
     }
     catch (e: any) {
       setScriptOutput(prev => ({ ...prev, [key]: { ok: false, output: String(e) } }));

@@ -45,9 +45,30 @@ export function UniverseSection({ universe, onRefresh }: Props) {
   const handleAdd = async () => {
     const t = newTicker.trim().toUpperCase();
     if (!t) return;
+
+    // Pre-validate: check for existing presence in any tier or excluded
+    const allTierTickers = ['tier1', 'tier2', 'macro']
+      .flatMap(tier => parseTickers(universe?.[tier] ?? []));
+    const excludedTickers = parseExcluded(universe?.excluded ?? []).map(e => e.ticker);
+
+    if (allTierTickers.includes(t)) {
+      const inTier = ['tier1', 'tier2', 'macro'].find(tier => parseTickers(universe?.[tier] ?? []).includes(t));
+      setErr(`${t} is already in ${inTier}. Remove it first to re-add to a different tier.`);
+      return;
+    }
+    if (excludedTickers.includes(t)) {
+      setErr(`${t} is in the excluded list. Click Restore first, then re-add to a tier.`);
+      return;
+    }
+
     busy(`add-${t}`);
     try { await addTicker(t, newTier); setNewTicker(''); done(); }
-    catch (e) { fail(e); }
+    catch (e: any) {
+      // Extract readable message from backend 409/422 errors
+      const msg = e?.message ?? String(e);
+      const match = msg.match(/"detail":"([^"]+)"/);
+      fail(match ? { message: match[1] } : e);
+    }
   };
 
   const handleRemove = async (tier: string, ticker: string) => {
@@ -72,11 +93,30 @@ export function UniverseSection({ universe, onRefresh }: Props) {
     catch (e) { fail(e); }
   };
 
+  // Detect tickers that appear in both a tier AND excluded (state inconsistency)
+  const allTierTickers = new Set(
+    ['tier1', 'tier2', 'macro'].flatMap(tier => parseTickers(universe?.[tier] ?? []))
+  );
+  const excludedSet = new Set(parseExcluded(universe?.excluded ?? []).map(e => e.ticker));
+  const inconsistent = [...allTierTickers].filter(t => excludedSet.has(t));
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {err && (
         <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', fontSize: 12, color: 'var(--red)' }}>
-          {err}
+          {err} <button onClick={() => setErr(null)} style={{ marginLeft: 8, color: 'var(--muted)', background: 'none', padding: '0 4px' }}>×</button>
+        </div>
+      )}
+
+      {/* Inconsistency warning */}
+      {inconsistent.length > 0 && (
+        <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', fontSize: 12 }}>
+          <span style={{ color: 'var(--yellow)', fontWeight: 700 }}>⚠ State inconsistency:</span>
+          {' '}<span style={{ color: 'var(--muted)' }}>These tickers appear in both a tier and the excluded list:</span>
+          {' '}{inconsistent.map(t => (
+            <span key={t} style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--yellow)', marginLeft: 6 }}>{t}</span>
+          ))}
+          <span style={{ color: 'var(--muted)', marginLeft: 8 }}>— click Restore to remove from excluded, or × to remove from the tier.</span>
         </div>
       )}
 
@@ -113,7 +153,8 @@ export function UniverseSection({ universe, onRefresh }: Props) {
                     background: tier.bg, border: `1px solid ${tier.border}`,
                     borderRadius: 6, padding: '3px 6px 3px 10px',
                   }}>
-                    <span style={{ fontWeight: 700, fontSize: 13, fontFamily: 'monospace', color: tier.color }}>{t}</span>
+                    <span style={{ fontWeight: 700, fontSize: 13, fontFamily: 'monospace', color: excludedSet.has(t) ? 'var(--yellow)' : tier.color }}>{t}</span>
+                    {excludedSet.has(t) && <span title="Also in excluded list" style={{ fontSize: 10, color: 'var(--yellow)', marginLeft: 2 }}>⚠</span>}
                     {/* Exclude button */}
                     <button
                       onClick={() => setExcludeTarget(t)}
