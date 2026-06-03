@@ -245,11 +245,15 @@ export const updateSettings    = (section: string, data: any) =>
   req<any>(`/api/settings/${section}`, { method: 'PATCH', body: JSON.stringify(data) });
 
 // ── Universe ─────────────────────────────────────────────────────────────────
-export const getUniverse       = () => req<any>('/api/universe');
-export const addTicker         = (ticker: string, tier = 'tier1') =>
-  req<any>(`/api/universe/${tier}/${ticker}`, { method: 'POST' });
-export const excludeTicker     = (ticker: string) =>
-  req<any>(`/api/universe/exclude/${ticker}`, { method: 'POST' });
+export const getUniverse     = () => req<any>('/api/universe');
+export const addTicker       = (ticker: string, tier = 'tier1') =>
+  req<any>('/api/universe/add', { method: 'POST', body: JSON.stringify({ ticker, tier }) });
+export const removeTicker    = (tier: string, ticker: string) =>
+  req<any>(`/api/universe/${encodeURIComponent(tier)}/${encodeURIComponent(ticker)}`, { method: 'DELETE' });
+export const excludeTicker   = (ticker: string, reason = 'manual', note = '') =>
+  req<any>('/api/universe/exclude', { method: 'POST', body: JSON.stringify({ ticker, reason, note }) });
+export const unexcludeTicker = (ticker: string) =>
+  req<any>(`/api/universe/exclude/${encodeURIComponent(ticker)}`, { method: 'DELETE' });
 
 // ── Scripts ──────────────────────────────────────────────────────────────────
 export const listScripts       = () => req<any>('/api/run/scripts');
