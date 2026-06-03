@@ -1,5 +1,17 @@
 import { useState } from 'react';
-import { getIbkrStatus, testQuantData, getApiHealth, triggerIbkrSync } from '../../lib/api';
+import { getIbkrStatus, testQuantData, getApiHealth, triggerIbkrSync, getQuantDataReports, getUniverse, getIvRank, type IvRankData } from '../../lib/api';
+
+// ── QuantData capabilities ────────────────────────────────────────────────────
+
+const QD_CATEGORIES: { label: string; tools: string[] }[] = [
+  { label: 'Volatility', tools: ['iv_rank','volatility_skew','volatility_drift','term_structure','net_drift'] },
+  { label: 'Flow',       tools: ['order_flow','net_flow','dark_pool_levels','unconsolidated_flow','trade_side_stats'] },
+  { label: 'Exposure',   tools: ['exposure_by_strike','exposure_by_expiration','oi_by_strike','oi_by_expiration','oi_change','oi_over_time'] },
+  { label: 'Max Pain',   tools: ['max_pain','max_pain_over_time'] },
+  { label: 'Market',     tools: ['market_snapshot','gainers_losers','heat_map','interval_map','get_news_articles'] },
+  { label: 'Price',      tools: ['contract_price','contract_statistics','stock_price_time','get_equity_prints'] },
+];
+const BROKEN_TOOLS = new Set(['exposure_by_strike','volatility_skew']);
 
 // ── Shared UI ─────────────────────────────────────────────────────────────────
 
@@ -241,6 +253,175 @@ function BackendCard() {
   );
 }
 
+// ── QuantData capabilities panel ─────────────────────────────────────────────
+
+type IvState = { status: 'idle' | 'loading' | 'ok' | 'error'; data?: IvRankData; error?: string };
+
+function QuantDataCapabilities() {
+  const [qd, setQd]               = useState<any>(null);
+  const [universe, setUniverse]   = useState<string[]>([]);
+  const [loading, setLoading]     = useState(false);
+  const [loaded, setLoaded]       = useState(false);
+  const [ivRows, setIvRows]       = useState<Record<string, IvState>>({});
+  const [ivFetching, setIvFetching] = useState(false);
+
+  const loadCapabilities = async () => {
+    setLoading(true);
+    try {
+      const [q, u] = await Promise.allSettled([getQuantDataReports(), getUniverse()]);
+      if (q.status === 'fulfilled') setQd(q.value);
+      if (u.status === 'fulfilled') {
+        const raw: any[] = (u.value as any)?.tickers ?? (u.value as any)?.tier1 ?? [];
+        setUniverse(raw.map((t: any) => typeof t === 'string' ? t : (t?.ticker ?? String(t))));
+      }
+      setLoaded(true);
+    } finally { setLoading(false); }
+  };
+
+  const loadIvRanks = async (unis: string[]) => {
+    if (!unis.length) return;
+    setIvFetching(true);
+    const init: Record<string, IvState> = {};
+    unis.forEach(t => { init[t] = { status: 'loading' }; });
+    setIvRows(init);
+    await Promise.allSettled(unis.map(async ticker => {
+      try {
+        const data = await getIvRank(ticker);
+        setIvRows(prev => ({ ...prev, [ticker]: { status: 'ok', data } }));
+      } catch (e: any) {
+        setIvRows(prev => ({ ...prev, [ticker]: { status: 'error', error: String(e) } }));
+      }
+    }));
+    setIvFetching(false);
+  };
+
+  const toolNames: Set<string> = new Set((qd?.all_tools_in_config ?? []).map((t: any) => t.name as string));
+  const connected = (qd?.config_tool_count ?? toolNames.size) > 0;
+  const hasIvData = Object.values(ivRows).some(r => r.status === 'ok' || r.status === 'error');
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{
+        padding: '10px 16px', background: 'var(--surface2)', borderBottom: loaded ? '1px solid var(--border)' : 'none',
+        display: 'flex', alignItems: 'center', gap: 10,
+      }}>
+        <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>QuantData — Tools &amp; IV Ranks</span>
+        <button
+          onClick={loadCapabilities} disabled={loading}
+          style={{ fontSize: 11, padding: '3px 10px', background: 'var(--surface)', border: '1px solid var(--border2)', color: 'var(--muted)', borderRadius: 5 }}
+        >
+          {loading ? '…' : loaded ? '↻ Refresh' : 'Load'}
+        </button>
+      </div>
+
+      {loaded && (
+        <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+          {/* Tool capability grid */}
+          {connected && (
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
+                {qd?.config_tool_count ?? toolNames.size} tools configured
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {QD_CATEGORIES.map(cat => {
+                  const present = cat.tools.filter(t => toolNames.size === 0 || toolNames.has(t));
+                  if (!present.length) return null;
+                  return (
+                    <div key={cat.label}>
+                      <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
+                        {cat.label}
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                        {present.map(tool => {
+                          const broken = BROKEN_TOOLS.has(tool);
+                          return (
+                            <span key={tool} style={{
+                              fontSize: 10, padding: '2px 8px', borderRadius: 20, fontFamily: 'monospace',
+                              background: broken ? 'rgba(239,68,68,0.08)' : 'rgba(99,102,241,0.1)',
+                              color: broken ? 'var(--red)' : 'var(--accent)',
+                              border: `1px solid ${broken ? 'rgba(239,68,68,0.25)' : 'rgba(99,102,241,0.25)'}`,
+                              opacity: broken ? 0.7 : 1,
+                            }}>
+                              {broken ? '⚠ ' : ''}{tool}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {BROKEN_TOOLS.size > 0 && (
+                <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>
+                  ⚠ <code>exposure_by_strike</code> and <code>volatility_skew</code> return no options data during market hours — GitHub issue pending.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* IV Rank table */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>IV Rank — Universe</span>
+              <button
+                onClick={() => loadIvRanks(universe)}
+                disabled={ivFetching || !universe.length}
+                style={{ fontSize: 11, padding: '2px 8px', background: 'var(--surface)', border: '1px solid var(--border2)', color: 'var(--muted)', borderRadius: 4 }}
+              >
+                {ivFetching ? '…' : hasIvData ? '↻ Refresh' : 'Load'}
+              </button>
+            </div>
+            {!hasIvData && !ivFetching && (
+              <p style={{ fontSize: 12, color: 'var(--muted)' }}>
+                {universe.length ? `${universe.length} tickers — click Load to fetch.` : 'Universe not loaded.'}
+              </p>
+            )}
+            {hasIvData && (
+              <div style={{ overflowX: 'auto' }}>
+                <table>
+                  <thead><tr>
+                    <th>Ticker</th>
+                    <th className="text-right">IVR</th>
+                    <th className="text-right">IV%</th>
+                    <th className="text-right">52w Hi</th>
+                    <th className="text-right">52w Lo</th>
+                  </tr></thead>
+                  <tbody>
+                    {universe.map(ticker => {
+                      const row = ivRows[ticker];
+                      if (!row || row.status === 'loading')
+                        return <tr key={ticker}><td style={{ fontWeight: 600 }}>{ticker}</td><td colSpan={4} style={{ color: 'var(--muted)', fontSize: 11 }}>loading…</td></tr>;
+                      if (row.status === 'error')
+                        return <tr key={ticker}><td style={{ fontWeight: 600 }}>{ticker}</td><td colSpan={4} style={{ color: 'var(--red)', fontSize: 11 }}>{row.error}</td></tr>;
+                      const d = row.data!;
+                      const ivr = d.iv_rank;
+                      const ivrColor = ivr == null ? 'var(--muted)' : ivr >= 50 ? 'var(--green)' : ivr >= 25 ? 'var(--yellow)' : 'var(--muted)';
+                      return (
+                        <tr key={ticker}>
+                          <td style={{ fontWeight: 600 }}>{ticker}</td>
+                          <td className="text-right mono" style={{ color: ivrColor, fontWeight: 600 }}>
+                            {ivr != null ? ivr.toFixed(1) : '—'}{ivr != null && ivr >= 25 ? ' ✓' : ''}
+                          </td>
+                          <td className="text-right mono">{d.current_iv != null ? (d.current_iv * 100).toFixed(1) + '%' : '—'}</td>
+                          <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_high != null ? (d.iv_52w_high * 100).toFixed(1) + '%' : '—'}</td>
+                          <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_low  != null ? (d.iv_52w_low  * 100).toFixed(1) + '%' : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p style={{ fontSize: 10, color: 'var(--muted)', marginTop: 6 }}>IVR ≥ 25 required (✓). ≥ 50 = prime entry zone.</p>
+              </div>
+            )}
+          </div>
+
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Exported section ─────────────────────────────────────────────────────────
 
 export function ConnectionsSection() {
@@ -252,6 +433,7 @@ export function ConnectionsSection() {
       <IbkrCard />
       <QuantDataCard />
       <BackendCard />
+      <QuantDataCapabilities />
     </div>
   );
 }

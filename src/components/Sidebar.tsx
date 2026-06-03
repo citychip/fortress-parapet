@@ -1,16 +1,34 @@
+import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
+import { getIbkrStatus, type IbkrStatusData } from '../lib/api';
 
 const NAV = [
   { path: '/',            label: 'Overview',   icon: '◈' },
   { path: '/portfolio',   label: 'Portfolio',  icon: '▦' },
   { path: '/candidates',  label: 'Candidates', icon: '⊕' },
-  { path: '/market',      label: 'Market',     icon: '◎' },
   { path: '/orders',      label: 'Orders',     icon: '⊡' },
   { path: '/system',      label: 'System',     icon: '⚙' },
 ];
 
+function useIbkrDot() {
+  const [data, setData] = useState<IbkrStatusData | null>(null);
+  useEffect(() => {
+    const poll = () => getIbkrStatus().then(setData).catch(() => setData(null));
+    poll();
+    const id = setInterval(poll, 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const s = data?.web_api?.session_status;
+  if (!s)                                      return { color: 'var(--muted)',  label: 'IBKR —',    title: 'Status unknown' };
+  if (s.established)                           return { color: 'var(--green)',  label: 'IBKR ●',    title: 'Connected & established' };
+  if (s.authenticated && s.connected)          return { color: 'var(--yellow)', label: 'IBKR ◑',    title: 'Authenticated, not established' };
+  if (s.authenticated)                         return { color: 'var(--yellow)', label: 'IBKR ○',    title: 'Authenticated only' };
+  return                                              { color: 'var(--red)',    label: 'IBKR ✕',    title: 'Disconnected' };
+}
+
 export default function Sidebar() {
   const [location, navigate] = useLocation();
+  const ibkr = useIbkrDot();
 
   return (
     <nav style={{
@@ -33,6 +51,12 @@ export default function Sidebar() {
         </div>
         <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
           Fortress v5
+        </div>
+        <div
+          title={ibkr.title}
+          style={{ fontSize: 11, color: ibkr.color, marginTop: 8, fontWeight: 600, letterSpacing: '0.02em', cursor: 'default' }}
+        >
+          {ibkr.label}
         </div>
       </div>
 

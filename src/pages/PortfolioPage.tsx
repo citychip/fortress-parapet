@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useSortable, SortTh } from '../components/Sortable';
 import Layout from '../components/Layout';
 import Card from '../components/Card';
@@ -6,42 +6,32 @@ import { TabBar } from '../components/Tabs';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import {
-  getPositions, getPnl, getSectorExposure, getPortfolioBeta,
-  getJournal, addJournalEntry, fmt$, clsN,
-  type PositionData, type PnLData,
+  getPositions, getSectorExposure, getPortfolioBeta,
+  getForwardPnl, fmt$, clsN,
+  type PositionData, type ForwardPnlData,
 } from '../lib/api';
 
 export default function PortfolioPage() {
-  const [tab, setTab] = useState('positions');
-  const [positions, setPositions] = useState<PositionData[]>([]);
+  const [tab, setTab]             = useState('pnl');
   const [posLegs, setPosLegs]     = useState<PositionData[]>([]);
-  const [pnl, setPnl]             = useState<PnLData | null>(null);
   const [sector, setSector]       = useState<any>(null);
   const [beta, setBeta]           = useState<any>(null);
-  const [journal, setJournal]     = useState<any[]>([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [journalNote, setJournalNote] = useState('');
-  const [journalSaving, setJournalSaving] = useState(false);
 
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
     setError(null);
     try {
       const results = await Promise.allSettled([
-        getPositions(), getPnl(),
-        getSectorExposure(), getPortfolioBeta(), getJournal(),
+        getPositions(), getSectorExposure(), getPortfolioBeta(),
       ]);
       if (results[0].status === 'fulfilled') {
-        const legs = results[0].value?.positions ?? [];
-        setPositions(legs);
-        setPosLegs(legs); // same data — Positions tab groups, Legs tab shows raw
+        setPosLegs((results[0].value?.positions ?? []).map(augmentLeg));
       }
-      if (results[1].status === 'fulfilled') setPnl(results[1].value);
-      if (results[2].status === 'fulfilled') setSector(results[2].value);
-      if (results[3].status === 'fulfilled') setBeta(results[3].value);
-      if (results[4].status === 'fulfilled') setJournal(results[4].value?.entries ?? results[4].value?.journal ?? []);
+      if (results[1].status === 'fulfilled') setSector(results[1].value);
+      if (results[2].status === 'fulfilled') setBeta(results[2].value);
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
       setError(String(e));
@@ -52,36 +42,22 @@ export default function PortfolioPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Auto-refresh every 5 minutes (silent background poll)
+  // Auto-refresh every 5 minutes
   useEffect(() => {
     const id = setInterval(() => load(true), 5 * 60_000);
     return () => clearInterval(id);
   }, [load]);
 
-  const saveJournal = async () => {
-    if (!journalNote.trim()) return;
-    setJournalSaving(true);
-    try {
-      await addJournalEntry({ note: journalNote, timestamp: new Date().toISOString() });
-      setJournalNote('');
-      const j = await getJournal();
-      setJournal(j?.entries ?? j?.journal ?? []);
-    } finally {
-      setJournalSaving(false);
-    }
-  };
-
   const TABS = [
-    { key: 'positions', label: 'Positions' },
-    { key: 'legs',      label: 'Legs' },
-    { key: 'pnl',       label: 'P&L' },
-    { key: 'exposure',  label: 'Exposure' },
-    { key: 'journal',   label: 'Journal' },
+    { key: 'pnl',        label: 'P&L' },
+    { key: 'exposure',   label: 'Exposure' },
+    { key: 'forwardpnl', label: 'Forward P&L' },
+    { key: 'legs',       label: 'Legs' },
   ];
 
   return (
     <Layout title="Portfolio" onRefresh={load} loading={loading} lastUpdated={updatedAt}>
-      {loading && !positions.length && (
+      {loading && !posLegs.length && (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
           <Spinner size={32} />
         </div>
@@ -90,16 +66,11 @@ export default function PortfolioPage() {
 
       <TabBar tabs={TABS} active={tab} onChange={setTab} />
 
-      {/* POSITIONS TAB */}
-      {tab === 'positions' && (
-        <PositionsTab positions={positions} />
-      )}
+      {/* P&L TAB */}
+      {tab === 'pnl' && <PnlTab legs={posLegs} />}
 
       {/* LEGS TAB */}
       {tab === 'legs' && <LegsTab legs={posLegs} />}
-
-      {/* P&L TAB — client-side computation from legs */}
-      {tab === 'pnl' && <PnlTab legs={posLegs} />}
 
       {/* EXPOSURE TAB */}
       {tab === 'exposure' && (
@@ -175,59 +146,9 @@ export default function PortfolioPage() {
         </div>
       )}
 
-      {/* JOURNAL TAB */}
-      {tab === 'journal' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Card title="Add Entry">
-            <div style={{ display: 'flex', gap: 10 }}>
-              <input
-                value={journalNote}
-                onChange={e => setJournalNote(e.target.value)}
-                placeholder="Trade note, observation, decision rationale..."
-                style={{ flex: 1 }}
-                onKeyDown={e => e.key === 'Enter' && saveJournal()}
-              />
-              <button onClick={saveJournal} disabled={journalSaving || !journalNote.trim()} style={{
-                background: 'var(--accent)', color: '#fff',
-              }}>
-                {journalSaving ? '…' : 'Save'}
-              </button>
-            </div>
-          </Card>
-          <Card title="Entries">
-            {journal.length === 0
-              ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No journal entries.</p>
-              : journal.slice().reverse().map((e: any, i: number) => (
-                <div key={i} style={{
-                  padding: '10px 0', borderBottom: '1px solid var(--border)',
-                  display: 'flex', gap: 12,
-                }}>
-                  <span style={{ color: 'var(--muted)', fontSize: 11, flexShrink: 0, marginTop: 2 }}>
-                    {e.timestamp ? new Date(e.timestamp).toLocaleDateString() : '—'}
-                  </span>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {(e.ticker || e.action) && (
-                      <div style={{ fontSize: 12 }}>
-                        {e.ticker && <span style={{ fontWeight: 600, marginRight: 8 }}>{e.ticker}</span>}
-                        {e.action && <span style={{ color: 'var(--accent)', marginRight: 8 }}>{e.action}</span>}
-                        {e.strategy && <span style={{ color: 'var(--muted)' }}>{e.strategy}</span>}
-                      </div>
-                    )}
-                    <span style={{ fontSize: 13 }}>
-                      {e.description ?? e.notes ?? e.note ?? e.text ?? e.content ?? JSON.stringify(e)}
-                    </span>
-                    {e.realized_pnl != null && (
-                      <span style={{ fontSize: 12, color: e.realized_pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                        P&L: {e.realized_pnl >= 0 ? '+' : ''}{e.realized_pnl}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))
-            }
-          </Card>
-        </div>
-      )}
+      {/* FORWARD P&L TAB */}
+      {tab === 'forwardpnl' && <ForwardPnlTab positions={posLegs} />}
+
     </Layout>
   );
 }
@@ -401,318 +322,302 @@ const netOf = (legs: any[], field: string) =>
 const fmtStrike = (l: any) =>
   l?.strike && l.strike !== 0 ? `$${l.strike}${l.right ?? ''}` : null;
 
-// ── Strategy grouping ─────────────────────────────────────────────────────────
+// ── Forward P&L Tab ───────────────────────────────────────────────────────────
 
-type StratGroup =
-  | { type: 'PMCC';    leap: any; sc: any }
-  | { type: 'IC';      sc: any; lc: any; sp: any; lp: any }
-  | { type: 'BPS';     sp: any; lp: any }   // put spread (short higher / long lower)
-  | { type: 'STR';     sc: any; sp: any }   // strangle / straddle
-  | { type: 'LEG';     leg: any };
+// Parse expiry/strike/right from IBKR local_symbol when the backend leaves them null.
+// Format: "TICKER  YYMMDD[C|P]STRIKE8DIGITS ..."
+// e.g. "AMD   260626P00380000 100" → expiry=2026-06-26, right=P, strike=380
+function parseLocalSymbol(localSymbol: string | null | undefined): { expiry: string | null; right: string | null; strike: number | null } {
+  const empty = { expiry: null, right: null, strike: null };
+  if (!localSymbol) return empty;
+  const m = localSymbol.match(/\[\S+\s+(\d{6})([CP])(\d{8})/);
+  if (!m) return empty;
+  const [, yymmdd, right, strikeStr] = m;
+  const expiry = `20${yymmdd.slice(0, 2)}-${yymmdd.slice(2, 4)}-${yymmdd.slice(4, 6)}`;
+  const strike = parseInt(strikeStr, 10) / 1000;
+  return { expiry, right, strike };
+}
 
-function groupTickerLegs(legs: any[]): StratGroup[] {
-  const taken = new Set<any>();
-  const free  = (l: any) => !taken.has(l);
-  const take  = (...ls: any[]) => ls.forEach(l => taken.add(l));
-  const result: StratGroup[] = [];
+function augmentLeg(p: any): any {
+  if (p.expiry && p.strike && p.right) return p;
+  const parsed = parseLocalSymbol(p.local_symbol);
+  return {
+    ...p,
+    expiry: p.expiry ?? parsed.expiry,
+    strike: (p.strike && p.strike !== 0) ? p.strike : (parsed.strike ?? p.strike),
+    right:  p.right  ?? parsed.right,
+  };
+}
 
-  const sc = legs.filter(l => free(l) && l.leg_direction === 'short' && l.right === 'C');
-  const lc = legs.filter(l => free(l) && l.leg_direction === 'long'  && l.right === 'C');
-  const sp = legs.filter(l => free(l) && l.leg_direction === 'short' && l.right === 'P');
-  const lp = legs.filter(l => free(l) && l.leg_direction === 'long'  && l.right === 'P');
-
-  // 1. Iron Condor: SC + LC(above) + SP + LP(below)
-  for (const shortCall of [...sc]) {
-    if (!free(shortCall)) continue;
-    for (const shortPut of sp.filter(free)) {
-      const longCall = lc.filter(free).find(l => l.strike > shortCall.strike);
-      const longPut  = lp.filter(free).find(l => l.strike < shortPut.strike);
-      if (longCall && longPut) {
-        take(shortCall, shortPut, longCall, longPut);
-        result.push({ type: 'IC', sc: shortCall, lc: longCall, sp: shortPut, lp: longPut });
-        break;
-      }
+function interpolatePnl(curve: ForwardPnlData['curve'], price: number): number | null {
+  for (let i = 0; i < curve.length - 1; i++) {
+    const a = curve[i], b = curve[i + 1];
+    if (price >= a.price && price <= b.price) {
+      const t = (price - a.price) / (b.price - a.price);
+      return a.pnl + t * (b.pnl - a.pnl);
     }
   }
-
-  // 2. PMCC: long LEAP call (DTE > 90) → short call (higher strike, shorter DTE)
-  for (const leap of lc.filter(free).filter(l => dte(l.expiry) > 90 && (l.strike ?? 0) > 0)) {
-    const shortCall = sc.filter(free).find(s => (s.strike ?? 0) > (leap.strike ?? 0));
-    if (shortCall) { take(leap, shortCall); result.push({ type: 'PMCC', leap, sc: shortCall }); }
-  }
-
-  // 3. Put spreads: short put + long put (lower strike)
-  for (const shortPut of sp.filter(free)) {
-    const longPut = lp.filter(free).find(l => l.strike < shortPut.strike);
-    if (longPut) { take(shortPut, longPut); result.push({ type: 'BPS', sp: shortPut, lp: longPut }); }
-  }
-
-  // 4. Strangles: short call + short put (same non-null expiry)
-  for (const shortCall of sc.filter(free)) {
-    if (!shortCall.expiry) continue;
-    const shortPut = sp.filter(free).find(l => l.expiry && l.expiry === shortCall.expiry);
-    if (shortPut) { take(shortCall, shortPut); result.push({ type: 'STR', sc: shortCall, sp: shortPut }); }
-  }
-
-  // 5. Remaining unpaired legs
-  for (const leg of legs.filter(free)) result.push({ type: 'LEG', leg });
-
-  return result;
+  return null;
 }
 
-// ── Badge styles ──────────────────────────────────────────────────────────────
+function ForwardPnlTab({ positions }: { positions: any[] }) {
+  const augmented = positions; // already augmented at load time
+  const tickers   = [...new Set(augmented.map((p: any) => p.ticker as string).filter(Boolean))].sort();
 
-const BADGE: Record<string, { bg: string; color: string }> = {
-  PMCC: { bg: 'rgba(99,102,241,0.15)',  color: 'var(--accent)' },
-  IC:   { bg: 'rgba(59,130,246,0.15)',  color: 'var(--blue)' },
-  BPS:  { bg: 'rgba(34,197,94,0.12)',   color: 'var(--green)' },
-  STR:  { bg: 'rgba(245,158,11,0.15)',  color: 'var(--yellow)' },
-  LEG:  { bg: 'rgba(100,116,139,0.15)', color: 'var(--muted)' },
-};
+  const [ticker, setTicker]         = useState(tickers[0] ?? '');
+  const [targetDate, setTargetDate] = useState('');
+  const [ivAdj, setIvAdj]           = useState(1.0);
+  const [data, setData]             = useState<ForwardPnlData | null>(null);
+  const [loading, setLoading]       = useState(false);
+  const [err, setErr]               = useState<string | null>(null);
 
-// ── Strategy row ──────────────────────────────────────────────────────────────
+  // Expiry dates available for selected ticker — parsed from local_symbol if needed
+  const tickerExpiries = [...new Set(
+    augmented
+      .filter((p: any) => p.ticker === ticker && p.expiry)
+      .map((p: any) => p.expiry as string)
+  )].sort();
 
-function StratRow({ badge, strike, expiry, legs, alert }: {
-  badge: string;
-  strike: ReactNode;
-  expiry: string | null | undefined;
-  legs: any[];
-  alert?: boolean;
-}) {
-  const d        = dte(expiry);
-  const dteColor = d <= 7 ? 'var(--red)' : d <= 14 ? 'var(--yellow)' : 'var(--muted)';
-  const netDelta = netOf(legs, 'current_delta');
-  const netTheta = netOf(legs, 'current_theta') * 100; // × 100 shares
-  const netMv    = netOf(legs, 'market_value');
-  const netNlv   = netOf(legs, 'net_liq_pct');
-  const { bg, color } = BADGE[badge] ?? BADGE.LEG;
-  const deltaWarn = Math.abs(netDelta) > 0.35;
+  // Set nearest expiry whenever ticker changes OR expiry list populates
+  useEffect(() => {
+    if (!tickerExpiries.length) return;
+    setTargetDate(prev => tickerExpiries.includes(prev) ? prev : tickerExpiries[0]);
+  }, [ticker, tickerExpiries.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '52px 1fr 120px 72px 64px 80px 52px',
-      alignItems: 'center',
-      gap: 8,
-      padding: '9px 16px',
-      borderTop: '1px solid var(--border)',
-      background: alert ? 'rgba(239,68,68,0.03)' : undefined,
-    }}>
-      {/* Badge */}
-      <span style={{
-        fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
-        background: bg, color, textAlign: 'center', letterSpacing: '0.04em',
-      }}>{badge}</span>
+  // Load when any control changes
+  useEffect(() => {
+    if (!ticker || !targetDate) return;
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
 
-      {/* Strike description */}
-      <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{strike}</span>
+    const tickerLegs = augmented.filter((p: any) => p.ticker === ticker);
+    // Derive a rough target_price from strike data (used only for target_pnl annotation;
+    // the curve itself is centered on spot by the backend)
+    const strikes = tickerLegs.map((l: any) => l.strike).filter((s: any) => s > 0);
+    const targetPrice = data?.spot
+      ?? (strikes.length ? Math.round(strikes.reduce((a: number, b: number) => a + b, 0) / strikes.length) : 100);
 
-      {/* Expiry + DTE */}
-      <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-        {expiry ?? '—'}
-        {expiry && <span style={{ color: dteColor, marginLeft: 5, fontWeight: d <= 14 ? 600 : 400 }}>{d}d</span>}
-      </span>
+    getForwardPnl(ticker, tickerLegs, targetPrice, targetDate, ivAdj)
+      .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch((e: any) => { if (!cancelled) { setErr(String(e)); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [ticker, targetDate, ivAdj]); // eslint-disable-line react-hooks/exhaustive-deps
 
-      {/* Delta */}
-      <span style={{
-        fontFamily: 'monospace', fontSize: 12, textAlign: 'right',
-        color: deltaWarn ? 'var(--yellow)' : netDelta > 0 ? 'var(--green)' : netDelta < 0 ? 'var(--red)' : 'var(--muted)',
-      }}>
-        {netDelta > 0 ? '+' : ''}{netDelta.toFixed(3)}
-      </span>
-
-      {/* Theta */}
-      <span style={{ fontFamily: 'monospace', fontSize: 11, textAlign: 'right', color: netTheta >= 0 ? 'var(--green)' : 'var(--red)' }}>
-        {netTheta >= 0 ? '+' : ''}${Math.abs(netTheta).toFixed(0)}/d
-      </span>
-
-      {/* Market value */}
-      <span style={{
-        fontFamily: 'monospace', fontSize: 12, textAlign: 'right',
-        color: netMv >= 0 ? 'var(--green)' : 'var(--red)',
-      }}>
-        {fmt$(netMv, 0)}
-      </span>
-
-      {/* NLV% */}
-      <span style={{ fontFamily: 'monospace', fontSize: 11, textAlign: 'right', color: 'var(--muted)' }}>
-        {netNlv > 0 ? '+' : ''}{netNlv.toFixed(1)}%
-      </span>
-    </div>
-  );
-}
-
-// ── Ticker section ────────────────────────────────────────────────────────────
-
-function TickerSection({ ticker, legs }: { ticker: string; legs: any[] }) {
-  const groups   = groupTickerLegs(legs);
-  const netDelta = netOf(legs, 'current_delta');
-  const netNlv   = netOf(legs, 'net_liq_pct');
-  const nearestDte = Math.min(...legs.map(l => dte(l.expiry)).filter(d => d > 0).concat([Infinity]));
-  const hasAlert = legs.some(l => l.delta_state === 'critical' || l.delta_state === 'watch');
-  const dteWarn  = nearestDte <= 14;
-  const isStock  = legs.every(l => l.sec_type === 'STK' || l.sec_type === 'STOCK');
+  const spotPnl = data ? interpolatePnl(data.curve, data.spot) : null;
 
   return (
-    <div style={{
-      border: `1px solid ${hasAlert ? 'rgba(245,158,11,0.4)' : 'var(--border)'}`,
-      borderRadius: 10, overflow: 'hidden',
-    }}>
-      {/* Ticker header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '10px 16px',
-        background: 'var(--surface2)',
-        borderBottom: '1px solid var(--border)',
-      }}>
-        <span style={{ fontWeight: 700, fontSize: 15, minWidth: 52 }}>{ticker}</span>
-        <span style={{ fontSize: 11, color: 'var(--muted)' }}>{legs.length} leg{legs.length !== 1 ? 's' : ''}</span>
-        {hasAlert && <span style={{ fontSize: 11, color: 'var(--yellow)', fontWeight: 600 }}>⚠ alert</span>}
-        {dteWarn && nearestDte !== Infinity && (
-          <span style={{
-            fontSize: 11, padding: '1px 7px', borderRadius: 10,
-            background: nearestDte <= 7 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.12)',
-            color: nearestDte <= 7 ? 'var(--red)' : 'var(--yellow)', fontWeight: 600,
-          }}>{nearestDte}d</span>
-        )}
-        <span style={{ flex: 1 }} />
-        {/* Column labels — align with StratRow grid */}
-        <span style={{ fontSize: 10, color: 'var(--muted)', minWidth: 72, textAlign: 'right' }}>Δ net</span>
-        <span style={{ fontSize: 10, color: 'var(--muted)', minWidth: 64, textAlign: 'right' }}>Θ/day</span>
-        <span style={{ fontSize: 10, color: 'var(--muted)', minWidth: 80, textAlign: 'right' }}>Mkt Val</span>
-        <span style={{ fontSize: 10, color: 'var(--muted)', minWidth: 52, textAlign: 'right' }}>NLV%</span>
-        {/* Totals */}
-        <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600, minWidth: 72, textAlign: 'right',
-          color: Math.abs(netDelta) > 0.35 ? 'var(--yellow)' : 'var(--text)' }}>
-          {netDelta > 0 ? '+' : ''}{netDelta.toFixed(3)}
-        </span>
-        <span style={{
-          fontFamily: 'monospace', fontSize: 12, minWidth: 52, textAlign: 'right', fontWeight: Math.abs(netNlv) > 50 ? 700 : 400,
-          color: Math.abs(netNlv) > 50 ? 'var(--red)' : Math.abs(netNlv) > 20 ? 'var(--yellow)' : 'var(--muted)',
-        }}>
-          {netNlv > 0 ? '+' : ''}{netNlv.toFixed(1)}%
-          {Math.abs(netNlv) > 50 && <span style={{ marginLeft: 4, fontSize: 10 }}>🔒</span>}
-        </span>
-      </div>
-
-      {/* Strategy rows */}
-      {isStock ? (
-        <div style={{ padding: '9px 16px', fontSize: 13, color: 'var(--muted)' }}>
-          Stock position · {legs[0]?.qty ?? '?'} shares · {fmt$(legs[0]?.market_value, 0)}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Controls */}
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>Ticker</span>
+            <select value={ticker} onChange={e => { setTicker(e.target.value); setData(null); setErr(null); }}>
+              {tickers.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>Expiry</span>
+            <select value={targetDate} onChange={e => setTargetDate(e.target.value)}>
+              {tickerExpiries.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[1.0, 0.6].map(m => (
+              <button key={m} onClick={() => setIvAdj(m)} style={{
+                fontSize: 12, padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                background: ivAdj === m ? 'var(--accent)' : 'transparent',
+                color: ivAdj === m ? '#fff' : 'var(--muted)',
+                border: `1px solid ${ivAdj === m ? 'var(--accent)' : 'var(--border)'}`,
+              }}>
+                {m === 1.0 ? '1.0× Normal' : '0.6× IV Crush'}
+              </button>
+            ))}
+          </div>
+          {loading && <Spinner size={16} />}
         </div>
-      ) : (
-        groups.map((g, i) => {
-          if (g.type === 'PMCC') {
-            const leapLabel = `${fmtStrike(g.leap)} LEAP`;
-            const shortLabel = fmtStrike(g.sc);
-            return (
-              <StratRow key={i} badge="PMCC"
-                strike={<><span style={{ color: 'var(--green)' }}>{leapLabel}</span><span style={{ color: 'var(--muted)' }}> → </span><span style={{ color: 'var(--red)' }}>{shortLabel}</span></>}
-                expiry={g.sc.expiry} legs={[g.leap, g.sc]}
-              />
-            );
-          }
-          if (g.type === 'IC') {
-            const w = `${fmtStrike(g.lp)}/${fmtStrike(g.sp)}P · ${fmtStrike(g.sc)}/${fmtStrike(g.lc)}C`;
-            return (
-              <StratRow key={i} badge="IC"
-                strike={<span style={{ color: 'var(--muted)' }}>{w}</span>}
-                expiry={g.sc.expiry} legs={[g.sc, g.lc, g.sp, g.lp]}
-              />
-            );
-          }
-          if (g.type === 'BPS') {
-            const width = g.sp.strike - g.lp.strike;
-            const isItm = g.sp.current_delta != null && Math.abs(g.sp.current_delta) > 0.5;
-            return (
-              <StratRow key={i} badge="BPS"
-                strike={<>
-                  <span style={{ color: 'var(--red)' }}>{fmtStrike(g.sp)}</span>
-                  <span style={{ color: 'var(--muted)' }}> / </span>
-                  <span style={{ color: 'var(--muted)' }}>{fmtStrike(g.lp)}</span>
-                  {width > 0 && <span style={{ color: 'var(--muted)', fontSize: 11 }}> ({width}w)</span>}
-                  {isItm && <span style={{ color: 'var(--red)', fontWeight: 700, marginLeft: 8, fontSize: 11 }}>⚠ ITM</span>}
-                </>}
-                expiry={g.sp.expiry} legs={[g.sp, g.lp]} alert={isItm}
-              />
-            );
-          }
-          if (g.type === 'STR') {
-            const isStraddle = g.sc.strike === g.sp.strike;
-            return (
-              <StratRow key={i} badge={isStraddle ? 'STD' : 'STR'}
-                strike={<><span style={{ color: 'var(--red)' }}>{fmtStrike(g.sp)}</span><span style={{ color: 'var(--muted)' }}> / </span><span style={{ color: 'var(--red)' }}>{fmtStrike(g.sc)}</span></>}
-                expiry={g.sc.expiry} legs={[g.sc, g.sp]}
-              />
-            );
-          }
-          // Single leg
-          const leg = g.leg;
-          const dir = leg.leg_direction === 'short' ? 'SHORT' : 'LONG';
-          return (
-            <StratRow key={i} badge="LEG"
-              strike={<><span style={{ color: leg.leg_direction === 'short' ? 'var(--red)' : 'var(--green)', fontSize: 10 }}>{dir} </span><span>{fmtStrike(leg)}</span></>}
-              expiry={leg.expiry} legs={[leg]}
-            />
-          );
-        })
+      </Card>
+
+      {err && <ErrorBanner msg={err} onRetry={() => setErr(null)} />}
+
+      {data && (
+        <>
+          {/* Stats row */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {(() => {
+              const fmtStat = (v: number) => fmt$(v, Math.abs(v) < 100 ? 2 : 0);
+              return [
+              { label: 'Max Profit',  value: fmtStat(data.max_profit),  cls: 'text-green' },
+              { label: 'Max Loss',    value: fmtStat(data.max_loss),    cls: 'text-red'   },
+              { label: 'Net Premium', value: fmtStat(data.net_premium), cls: clsN(data.net_premium) },
+              { label: `P&L @ Spot (${fmt$(data.spot, 0)})`,
+                value: spotPnl != null ? fmtStat(spotPnl) : '—', cls: clsN(spotPnl) },
+              ...data.breakevens.map((be, i) => ({
+                label: `Breakeven${data.breakevens.length > 1 ? ` ${i + 1}` : ''}`,
+                value: `$${be.toFixed(2)}`,
+                cls: '',
+              })),
+            ];})().map((s, i) => (
+              <div key={i} style={{
+                flex: 1, minWidth: 120, background: 'var(--surface)',
+                border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px',
+              }}>
+                <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>
+                  {s.label}
+                </div>
+                <div className={`mono ${s.cls}`} style={{ fontSize: 16, fontWeight: 700 }}>
+                  {s.value}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Chart */}
+          <Card title={`${data.ticker} forward P&L — expires ${data.target_date}${ivAdj < 1 ? ' (IV crush ×0.6)' : ''}`}>
+            <ForwardPnlChart data={data} spotPnl={spotPnl} />
+          </Card>
+        </>
+      )}
+
+      {!data && !loading && !err && (
+        <p style={{ color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: 40 }}>
+          Select a ticker and date to load the forward P&L curve.
+        </p>
       )}
     </div>
   );
 }
 
-// ── Positions tab ─────────────────────────────────────────────────────────────
+function ForwardPnlChart({ data, spotPnl }: { data: ForwardPnlData; spotPnl: number | null }) {
+  const { curve, spot, breakevens } = data;
+  if (!curve.length) return <p style={{ color: 'var(--muted)', fontSize: 13 }}>No curve data.</p>;
 
-function PositionsTab({ positions }: { positions: any[] }) {
-  // Group all legs by ticker
-  const byTicker = new Map<string, any[]>();
-  for (const leg of positions) {
-    const t = leg.ticker ?? '?';
-    byTicker.set(t, [...(byTicker.get(t) ?? []), leg]);
-  }
+  const W = 600, H = 240;
+  const M = { top: 20, right: 16, bottom: 38, left: 70 };
+  const iW = W - M.left - M.right;
+  const iH = H - M.top - M.bottom;
 
-  // Sort by absolute NLV% descending
-  const tickerGroups = [...byTicker.entries()]
-    .map(([t, ls]) => ({ ticker: t, legs: ls, nlv: netOf(ls, 'net_liq_pct') }))
-    .sort((a, b) => Math.abs(b.nlv) - Math.abs(a.nlv));
+  const xMin = curve[0].price;
+  const xMax = curve[curve.length - 1].price;
+  const pnls = curve.map(p => p.pnl);
+  const pad  = Math.max(Math.abs(Math.min(...pnls)), Math.abs(Math.max(...pnls))) * 0.12;
+  const yLo  = Math.min(Math.min(...pnls) - pad, 0);
+  const yHi  = Math.max(Math.max(...pnls) + pad, 0);
 
-  // Near-expiry banners
-  const critical = tickerGroups.filter(g => g.legs.some(l => dte(l.expiry) > 0 && dte(l.expiry) <= 7));
-  const warning  = tickerGroups.filter(g => !critical.includes(g) && g.legs.some(l => dte(l.expiry) > 0 && dte(l.expiry) <= 14));
+  const toX  = (p: number) => M.left + ((p - xMin) / (xMax - xMin)) * iW;
+  const toY  = (v: number) => M.top  + (1 - (v - yLo) / (yHi - yLo)) * iH;
+
+  const yZero = toY(0);
+  const pts   = (c: typeof curve) => c.map(p => `${toX(p.price).toFixed(1)},${toY(p.pnl).toFixed(1)}`).join(' ');
+  const line  = pts(curve);
+  const area  = [
+    `${toX(xMin).toFixed(1)},${yZero.toFixed(1)}`,
+    ...curve.map(p => `${toX(p.price).toFixed(1)},${toY(p.pnl).toFixed(1)}`),
+    `${toX(xMax).toFixed(1)},${yZero.toFixed(1)}`,
+  ].join(' ');
+
+  // Clip rects split at zero line
+  const aboveH = Math.max(0, Math.min(yZero, H - M.bottom) - M.top);
+  const belowY = Math.min(Math.max(yZero, M.top), H - M.bottom);
+  const belowH = Math.max(0, H - M.bottom - belowY);
+
+  // Axis ticks
+  const xTicks = [0, 0.2, 0.4, 0.6, 0.8, 1].map(t => xMin + t * (xMax - xMin));
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(t => yLo + t * (yHi - yLo));
+  const fmtK = (v: number) => {
+    if (v === 0) return '$0';
+    const sign = v >= 0 ? '+' : '-';
+    const abs  = Math.abs(v);
+    if (abs < 1000) return `${sign}$${abs.toFixed(0)}`;
+    return `${sign}$${(abs / 1000).toFixed(1)}K`;
+  };
+
+  const xSpot    = toX(spot);
+  const ySpotPnl = spotPnl != null ? toY(spotPnl) : null;
+  const inChart  = (x: number) => x >= M.left && x <= M.left + iW;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {critical.length > 0 && (
-        <div style={{
-          padding: '10px 14px', borderRadius: 8,
-          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
-          display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap',
-        }}>
-          <span style={{ color: 'var(--red)', fontWeight: 700 }}>⚠ Expiring soon (≤7d):</span>
-          {critical.map(g => {
-            const d = Math.min(...g.legs.map(l => dte(l.expiry)).filter(x => x > 0));
-            return <span key={g.ticker} style={{ fontFamily: 'monospace', fontSize: 12, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: 'var(--red)', fontWeight: 600 }}>{g.ticker} {d}d</span>;
-          })}
-        </div>
-      )}
-      {warning.length > 0 && (
-        <div style={{
-          padding: '10px 14px', borderRadius: 8,
-          background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)',
-          display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap',
-        }}>
-          <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>Near expiry (≤14d):</span>
-          {warning.map(g => {
-            const d = Math.min(...g.legs.map(l => dte(l.expiry)).filter(x => x > 0));
-            return <span key={g.ticker} style={{ fontFamily: 'monospace', fontSize: 12, padding: '2px 8px', borderRadius: 4, background: 'rgba(245,158,11,0.12)', color: 'var(--yellow)', fontWeight: 600 }}>{g.ticker} {d}d</span>;
-          })}
-        </div>
-      )}
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 280, display: 'block' }}>
+      <defs>
+        <clipPath id="fpnl-above"><rect x={M.left} y={M.top} width={iW} height={aboveH} /></clipPath>
+        <clipPath id="fpnl-below"><rect x={M.left} y={belowY} width={iW} height={belowH} /></clipPath>
+      </defs>
 
-      {tickerGroups.map(g => (
-        <TickerSection key={g.ticker} ticker={g.ticker} legs={g.legs} />
+      {/* Background */}
+      <rect x={M.left} y={M.top} width={iW} height={iH} fill="rgba(0,0,0,0.15)" rx={3} />
+
+      {/* Y gridlines */}
+      {yTicks.map((v, i) => (
+        <line key={i} x1={M.left} x2={M.left + iW} y1={toY(v)} y2={toY(v)}
+          stroke="var(--border)" strokeWidth={0.5} opacity={0.7} />
       ))}
-    </div>
+
+      {/* Filled areas */}
+      <polygon points={area} fill="rgba(34,197,94,0.13)"  clipPath="url(#fpnl-above)" />
+      <polygon points={area} fill="rgba(239,68,68,0.11)"  clipPath="url(#fpnl-below)" />
+
+      {/* Zero line */}
+      <line x1={M.left} x2={M.left + iW} y1={yZero} y2={yZero}
+        stroke="rgba(100,116,139,0.8)" strokeWidth={1.5} strokeDasharray="5 4" />
+
+      {/* Breakeven markers */}
+      {breakevens.map((be, i) => {
+        const xBe = toX(be);
+        if (!inChart(xBe)) return null;
+        return (
+          <g key={i}>
+            <line x1={xBe} x2={xBe} y1={M.top} y2={H - M.bottom}
+              stroke="var(--muted)" strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
+            <text x={xBe} y={M.top - 5} textAnchor="middle" fill="var(--muted)" fontSize={9}>
+              BE ${be.toFixed(0)}
+            </text>
+          </g>
+        );
+      })}
+
+      {/* Spot line */}
+      {inChart(xSpot) && (
+        <g>
+          <line x1={xSpot} x2={xSpot} y1={M.top} y2={H - M.bottom}
+            stroke="var(--accent)" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.75} />
+          <text x={xSpot + 5} y={M.top + 11} fill="var(--accent)" fontSize={9} fontWeight="600">
+            ${spot.toFixed(0)}
+          </text>
+        </g>
+      )}
+
+      {/* Curve — green above zero, red below */}
+      <polyline points={line} fill="none" stroke="rgba(34,197,94,0.9)"  strokeWidth={2.5} clipPath="url(#fpnl-above)" />
+      <polyline points={line} fill="none" stroke="rgba(239,68,68,0.9)"  strokeWidth={2.5} clipPath="url(#fpnl-below)" />
+
+      {/* Spot dot */}
+      {inChart(xSpot) && ySpotPnl != null && (
+        <circle cx={xSpot} cy={ySpotPnl} r={4} fill="var(--accent)" />
+      )}
+
+      {/* X axis */}
+      <line x1={M.left} x2={M.left + iW} y1={H - M.bottom} y2={H - M.bottom} stroke="var(--border)" />
+      {xTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={toX(v)} x2={toX(v)} y1={H - M.bottom} y2={H - M.bottom + 3} stroke="var(--border)" />
+          <text x={toX(v)} y={H - M.bottom + 13} textAnchor="middle" fill="var(--muted)" fontSize={9}>
+            ${v.toFixed(0)}
+          </text>
+        </g>
+      ))}
+
+      {/* Y axis */}
+      <line x1={M.left} x2={M.left} y1={M.top} y2={H - M.bottom} stroke="var(--border)" />
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={M.left - 3} x2={M.left} y1={toY(v)} y2={toY(v)} stroke="var(--border)" />
+          <text x={M.left - 7} y={toY(v) + 4} textAnchor="end" fill="var(--muted)" fontSize={9}>
+            {fmtK(v)}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
 

@@ -182,7 +182,36 @@ export const getPnlHistory     = () => req<any>('/api/pnl/history');
 export const getPortfolioBeta  = () => req<any>('/api/portfolio/beta');
 export const getSectorExposure = () => req<any>('/api/portfolio/sector-exposure');
 export const getCapitalEff     = () => req<any>('/api/portfolio/capital-efficiency');
-export const getForwardPnl     = () => req<any>('/api/options/forward-pnl');
+export interface ForwardPnlPoint { price: number; pnl: number; }
+export interface ForwardPnlData {
+  ticker: string;
+  spot: number;
+  target_price: number;
+  target_date: string;
+  iv_adj: number;
+  target_pnl: number;
+  curve: ForwardPnlPoint[];
+  max_profit: number;
+  max_loss: number;
+  net_premium: number;
+  breakevens: number[];
+}
+export const getForwardPnl = (
+  ticker: string,
+  legs: any[],
+  targetPrice: number,
+  targetDate: string,
+  ivAdj = 1.0,
+) => {
+  const params = new URLSearchParams({
+    ticker,
+    legs: JSON.stringify(legs),
+    target_price: String(targetPrice),
+    target_date: targetDate,
+    iv_adj: String(ivAdj),
+  });
+  return req<ForwardPnlData>(`/api/options/forward-pnl?${params.toString()}`);
+};
 export const getJournal        = () => req<any>('/api/journal');
 export const addJournalEntry   = (body: any) =>
   req<any>('/api/journal', { method: 'POST', body: JSON.stringify(body) });

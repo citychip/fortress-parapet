@@ -5,16 +5,13 @@ import { TabBar } from '../components/Tabs';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { StrategyTab } from '../components/system/StrategyTab';
-import { AlertsSection } from '../components/system/AlertsSection';
 import { InfraSection } from '../components/system/InfraSection';
-import { UniverseSection } from '../components/system/UniverseSection';
 import { ConnectionsSection } from '../components/system/ConnectionsSection';
 import { ScriptsSection } from '../components/system/ScriptsSection';
 import {
-  getSettings, updateSettings, getAlerts, addAlert, deleteAlert,
+  getSettings, updateSettings,
   listScripts, runScript, getIbkrStatus, triggerIbkrSync,
-  getUniverse,
-  type AlertData, type IbkrStatusData,
+  type IbkrStatusData,
 } from '../lib/api';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -143,29 +140,24 @@ function EditableSection({ section, values, onSaved }: { section: string; values
 export default function SystemPage() {
   const [tab, setTab]           = useState('settings');
   const [settings, setSettings] = useState<any>(null);
-  const [alerts, setAlerts]     = useState<AlertData[]>([]);
   const [scripts, setScripts]   = useState<any[]>([]);
   const [ibkr, setIbkr]         = useState<IbkrStatusData | null>(null);
-  const [universe, setUniverse] = useState<any>(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
-  const [running, setRunning]     = useState<string | null>(null);
+  const [running, setRunning]   = useState<string | null>(null);
   const [scriptOutput, setScriptOutput] = useState<Record<string, { ok: boolean; output: string }>>({});
-  const [syncing, setSyncing]     = useState(false);
-  const [newAlert, setNewAlert]   = useState({ ticker: '', condition: '', threshold: '' });
-  const [updatedAt, setUpdatedAt]   = useState<string | null>(null);
+  const [syncing, setSyncing]   = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [s, a, sc, i, u] = await Promise.allSettled([
-        getSettings(), getAlerts(), listScripts(), getIbkrStatus(), getUniverse(),
+      const [s, sc, i] = await Promise.allSettled([
+        getSettings(), listScripts(), getIbkrStatus(),
       ]);
-      if (s.status === 'fulfilled') setSettings(s.value?.config ?? s.value);
-      if (a.status === 'fulfilled') setAlerts(a.value?.alerts ?? []);
+      if (s.status === 'fulfilled')  setSettings(s.value?.config ?? s.value);
       if (sc.status === 'fulfilled') setScripts(sc.value?.scripts ?? []);
-      if (i.status === 'fulfilled') setIbkr(i.value);
-      if (u.status === 'fulfilled') setUniverse(u.value);
+      if (i.status === 'fulfilled')  setIbkr(i.value);
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
       setError(String(e));
@@ -202,29 +194,12 @@ export default function SystemPage() {
     finally { setSyncing(false); }
   };
 
-  const handleDeleteAlert = async (id: string) => {
-    try { await deleteAlert(id); await load(); }
-    catch (e: any) { setError(String(e)); }
-  };
-
-  const handleAddAlert = async () => {
-    if (!newAlert.ticker) return;
-    try {
-      await addAlert(newAlert);
-      setNewAlert({ ticker: '', condition: '', threshold: '' });
-      await load();
-    } catch (e: any) { setError(String(e)); }
-  };
-
-  const [settingsSubTab, setSettingsSubTab] = useState<'connections' | 'system'>('connections');
+  const [settingsSubTab, setSettingsSubTab] = useState<'connections' | 'config'>('connections');
 
   const TABS = [
-    { key: 'strategy',    label: 'Strategy' },
-    { key: 'settings',    label: 'Settings' },
-    { key: 'alerts',      label: 'Alerts' },
-    { key: 'scripts',     label: 'Scripts' },
-    { key: 'infra',       label: 'Connections' },
-    { key: 'universe',    label: 'Universe' },
+    { key: 'strategy', label: 'Strategy' },
+    { key: 'settings', label: 'Settings' },
+    { key: 'scripts',  label: 'Scripts' },
   ];
 
   return (
@@ -246,21 +221,26 @@ export default function SystemPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* Sub-tab bar */}
           <div style={{ display: 'flex', gap: 2, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 4 }}>
-            {(['connections', 'system'] as const).map(st => (
+            {(['connections', 'config'] as const).map(st => (
               <button key={st} onClick={() => setSettingsSubTab(st)} style={{
                 flex: 1, padding: '6px 0', borderRadius: 5, fontSize: 13, fontWeight: settingsSubTab === st ? 600 : 400,
                 background: settingsSubTab === st ? 'var(--surface2)' : 'none',
                 color: settingsSubTab === st ? 'var(--text)' : 'var(--muted)',
                 border: settingsSubTab === st ? '1px solid var(--border2)' : '1px solid transparent',
-              }}>{st.charAt(0).toUpperCase() + st.slice(1)}</button>
+              }}>{st === 'connections' ? 'Connections' : 'Config'}</button>
             ))}
           </div>
 
-          {/* Connections sub-tab */}
-          {settingsSubTab === 'connections' && <ConnectionsSection />}
+          {/* Connections sub-tab — IBKR gateway + ping tests */}
+          {settingsSubTab === 'connections' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <InfraSection ibkr={ibkr} syncing={syncing} onSync={handleSync} />
+              <ConnectionsSection />
+            </div>
+          )}
 
-          {/* System sub-tab */}
-          {settingsSubTab === 'system' && settings && (
+          {/* Config sub-tab — editable settings */}
+          {settingsSubTab === 'config' && settings && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {Object.entries(settings)
                 .filter(([section]) => !CLAUDE_ONLY_SECTIONS.has(section) && section !== 'technical')
@@ -286,16 +266,6 @@ export default function SystemPage() {
         </div>
       )}
 
-      {tab === 'alerts' && (
-        <AlertsSection
-          alerts={alerts}
-          newAlert={newAlert}
-          onNewAlertChange={setNewAlert}
-          onAdd={handleAddAlert}
-          onDelete={handleDeleteAlert}
-        />
-      )}
-
       {tab === 'scripts' && (
         <ScriptsSection
           scripts={scripts}
@@ -303,14 +273,6 @@ export default function SystemPage() {
           outputs={scriptOutput}
           onRun={handleRunScript}
         />
-      )}
-
-      {tab === 'infra' && (
-        <InfraSection ibkr={ibkr} syncing={syncing} onSync={handleSync} />
-      )}
-
-      {tab === 'universe' && (
-        <UniverseSection universe={universe} onRefresh={load} />
       )}
     </Layout>
   );
