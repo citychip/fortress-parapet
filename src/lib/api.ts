@@ -14,13 +14,19 @@ export interface PositionData {
   ticker: string;
   strategy?: string;
   leg_count?: number;
+  // aggregated view: spread strikes
   short_strike?: number | null;
   long_strike?: number | null;
+  // unaggregated (legs) view: individual leg fields
+  strike?: number | null;
+  leg_direction?: 'short' | 'long' | string;
+  right?: 'C' | 'P' | string | null;
+  qty?: number | null;
+  market_value?: number | null;
   expiry?: string | null;
   current_delta?: number | null;
   net_liq_pct?: number | null;
   alert_state?: 'safe' | 'watch' | 'act' | string;
-  // aggregated view only
   _legs?: PositionData[];
 }
 

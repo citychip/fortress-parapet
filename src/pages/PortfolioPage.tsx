@@ -29,15 +29,18 @@ export default function PortfolioPage() {
     setError(null);
     try {
       const results = await Promise.allSettled([
-        getPositions(true), getPositions(false), getPnl(),
+        getPositions(), getPnl(),
         getSectorExposure(), getPortfolioBeta(), getJournal(),
       ]);
-      if (results[0].status === 'fulfilled') setPositions(results[0].value?.positions ?? []);
-      if (results[1].status === 'fulfilled') setPosLegs(results[1].value?.positions ?? []);
-      if (results[2].status === 'fulfilled') setPnl(results[2].value);
-      if (results[3].status === 'fulfilled') setSector(results[3].value);
-      if (results[4].status === 'fulfilled') setBeta(results[4].value);
-      if (results[5].status === 'fulfilled') setJournal(results[5].value?.entries ?? results[5].value?.journal ?? []);
+      if (results[0].status === 'fulfilled') {
+        const legs = results[0].value?.positions ?? [];
+        setPositions(legs);
+        setPosLegs(legs); // same data — Positions tab groups, Legs tab shows raw
+      }
+      if (results[1].status === 'fulfilled') setPnl(results[1].value);
+      if (results[2].status === 'fulfilled') setSector(results[2].value);
+      if (results[3].status === 'fulfilled') setBeta(results[3].value);
+      if (results[4].status === 'fulfilled') setJournal(results[4].value?.entries ?? results[4].value?.journal ?? []);
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
       setError(String(e));
@@ -97,25 +100,46 @@ export default function PortfolioPage() {
           <div style={{ overflowX: 'auto' }}>
             <table>
               <thead><tr>
-                <th>Ticker</th><th>Strategy</th>
-                <th>Short</th><th>Long</th><th>Expiry</th>
+                <th>Ticker</th>
+                <th>Dir</th>
+                <th>Type</th>
+                <th className="text-right">Strike</th>
+                <th>Expiry</th>
+                <th className="text-right">Qty</th>
                 <th className="text-right">Delta</th>
+                <th className="text-right">Mkt Val</th>
                 <th className="text-right">NLV%</th>
                 <th>Alert</th>
               </tr></thead>
               <tbody>
-                {posLegs.map((p, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600 }}>{p.ticker}</td>
-                    <td style={{ color: 'var(--muted)', fontSize: 12 }}>{p.strategy}</td>
-                    <td className="mono">{p.short_strike ?? '—'}</td>
-                    <td className="mono" style={{ color: 'var(--muted)' }}>{p.long_strike ?? '—'}</td>
-                    <td style={{ fontSize: 12 }}>{p.expiry ?? '—'}</td>
-                    <td className="text-right mono">{p.current_delta?.toFixed(3) ?? '—'}</td>
-                    <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
-                    <td><AlertBadge state={p.alert_state} /></td>
-                  </tr>
-                ))}
+                {posLegs.map((p, i) => {
+                  const isShort = p.leg_direction === 'short';
+                  const dirColor = isShort ? 'var(--red)' : 'var(--green)';
+                  return (
+                    <tr key={i}>
+                      <td style={{ fontWeight: 600 }}>{p.ticker}</td>
+                      <td style={{ color: dirColor, fontWeight: 600, fontSize: 12 }}>
+                        {isShort ? 'SHORT' : 'LONG'}
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {p.right ? `${p.right === 'C' ? 'Call' : p.right === 'P' ? 'Put' : p.right}` : (p.strategy ?? '—')}
+                      </td>
+                      <td className="text-right mono">
+                        {p.strike != null && p.strike !== 0 ? p.strike : '—'}
+                      </td>
+                      <td style={{ fontSize: 12, color: 'var(--muted)' }}>{p.expiry ?? '—'}</td>
+                      <td className="text-right mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
+                        {p.qty != null ? (p.qty > 0 ? `+${p.qty}` : p.qty) : '—'}
+                      </td>
+                      <td className="text-right mono">{p.current_delta?.toFixed(3) ?? '—'}</td>
+                      <td className={`text-right mono ${p.market_value != null ? clsN(p.market_value) : ''}`} style={{ fontSize: 12 }}>
+                        {p.market_value != null ? fmt$(p.market_value, 0) : '—'}
+                      </td>
+                      <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
+                      <td><AlertBadge state={p.alert_state} /></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -308,16 +332,74 @@ export default function PortfolioPage() {
   );
 }
 
+// ── Client-side position grouping ────────────────────────────────────────────
+// The REST endpoint always returns individual legs (no aggregated param).
+// We group by ticker here to produce a useful position-level view.
+
+interface PositionGroup {
+  ticker: string;
+  legs: any[];
+  shortLegs: any[];
+  longLegs: any[];
+  netDelta: number;
+  totalNlvPct: number;
+  nearestExpiry: string | null;
+  nearestDte: number | null;
+  worstAlert: string;
+  // Formatted display strings
+  shortStrikes: string;
+  longStrikes: string;
+}
+
+function groupPositions(legs: any[]): PositionGroup[] {
+  const map = new Map<string, any[]>();
+  for (const leg of legs) {
+    const key = leg.ticker ?? '?';
+    const arr = map.get(key) ?? [];
+    arr.push(leg);
+    map.set(key, arr);
+  }
+
+  return [...map.entries()].map(([ticker, ls]) => {
+    const shortLegs = ls.filter(l => l.leg_direction === 'short');
+    const longLegs  = ls.filter(l => l.leg_direction === 'long');
+
+    const netDelta    = ls.reduce((s, l) => s + (l.current_delta ?? 0), 0);
+    const totalNlvPct = ls.reduce((s, l) => s + (l.net_liq_pct ?? 0), 0);
+
+    const expiries = ls.map(l => l.expiry).filter(Boolean).sort();
+    const nearestExpiry = expiries[0] ?? null;
+    const nearestDte = nearestExpiry
+      ? Math.ceil((new Date(nearestExpiry).getTime() - Date.now()) / 86400000)
+      : null;
+
+    const alertRank = (s: string) => s === 'act' || s === 'critical_gamma' ? 3 : s === 'watch' ? 2 : s === 'ok' || s === 'safe' ? 0 : 1;
+    const worstAlert = ls.reduce((w, l) => alertRank(l.alert_state) > alertRank(w) ? l.alert_state : w, 'safe');
+
+    // Format strike strings: "550P / 695C" for short, "535P / 710C" for long
+    const fmtLeg = (l: any) => l.strike && l.strike !== 0 ? `${l.strike}${l.right ?? ''}` : null;
+    const shortStrikes = shortLegs.map(fmtLeg).filter(Boolean).join(' / ') || '—';
+    // Separate LEAPs (DTE > 90) from near-term longs
+    const isLeap = (l: any) => l.expiry ? Math.ceil((new Date(l.expiry).getTime() - Date.now()) / 86400000) > 90 : false;
+    const leapLegs = longLegs.filter(isLeap);
+    const nearLongs = longLegs.filter(l => !isLeap(l));
+    const longDisplay = [
+      ...leapLegs.map(l => `${fmtLeg(l)} LEAP`),
+      ...nearLongs.map(l => fmtLeg(l) ?? ''),
+    ].filter(Boolean).join(' / ') || '—';
+
+    return { ticker, legs: ls, shortLegs, longLegs, netDelta, totalNlvPct, nearestExpiry, nearestDte, worstAlert, shortStrikes, longStrikes: longDisplay };
+  }).sort((a, b) => Math.abs(b.totalNlvPct) - Math.abs(a.totalNlvPct));
+}
+
 function PositionsTab({ positions }: { positions: any[] }) {
-  const withDte = positions.map(p => ({
-    ...p,
-    _dte: p.expiry ? Math.ceil((new Date(p.expiry).getTime() - Date.now()) / 86400000) : null as number | null,
-  }));
-  const critical = withDte.filter(p => p._dte != null && p._dte <= 7);
-  const warning  = withDte.filter(p => p._dte != null && p._dte > 7 && p._dte <= 14);
+  const groups = groupPositions(positions);
+  const critical = groups.filter(g => g.nearestDte != null && g.nearestDte <= 7);
+  const warning  = groups.filter(g => g.nearestDte != null && g.nearestDte > 7 && g.nearestDte <= 14);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Near-expiry banners */}
       {critical.length > 0 && (
         <div style={{
           padding: '10px 14px', borderRadius: 8,
@@ -325,11 +407,11 @@ function PositionsTab({ positions }: { positions: any[] }) {
           display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap',
         }}>
           <span style={{ color: 'var(--red)', fontWeight: 700 }}>⚠ Expiring soon (≤7d):</span>
-          {critical.map(p => (
-            <span key={p.ticker + p.expiry} style={{
+          {critical.map(g => (
+            <span key={g.ticker} style={{
               fontFamily: 'monospace', fontSize: 12, padding: '2px 8px', borderRadius: 4,
               background: 'rgba(239,68,68,0.15)', color: 'var(--red)', fontWeight: 600,
-            }}>{p.ticker} {p._dte}d</span>
+            }}>{g.ticker} {g.nearestDte}d</span>
           ))}
         </div>
       )}
@@ -340,49 +422,56 @@ function PositionsTab({ positions }: { positions: any[] }) {
           display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap',
         }}>
           <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>Near expiry (≤14d):</span>
-          {warning.map(p => (
-            <span key={p.ticker + p.expiry} style={{
+          {warning.map(g => (
+            <span key={g.ticker} style={{
               fontFamily: 'monospace', fontSize: 12, padding: '2px 8px', borderRadius: 4,
               background: 'rgba(245,158,11,0.12)', color: 'var(--yellow)', fontWeight: 600,
-            }}>{p.ticker} {p._dte}d</span>
+            }}>{g.ticker} {g.nearestDte}d</span>
           ))}
         </div>
       )}
+
+      {/* Positions table — one row per ticker, grouped */}
       <Card>
         <div style={{ overflowX: 'auto' }}>
           <table>
             <thead><tr>
-              <th>Ticker</th><th>Strategy</th><th>Legs</th>
-              <th>Short</th><th>Long</th><th>Expiry</th>
-              <th className="text-right">Delta</th>
+              <th>Ticker</th>
+              <th>Legs</th>
+              <th>Short</th>
+              <th>Long / LEAP</th>
+              <th>Near Expiry</th>
+              <th className="text-right">Net Δ</th>
               <th className="text-right">NLV%</th>
               <th>Alert</th>
             </tr></thead>
             <tbody>
-              {withDte.map((p, i) => {
-                const deltaWarn = p.current_delta && Math.abs(p.current_delta) > 0.4;
-                const expiryColor = p._dte != null && p._dte <= 7 ? 'var(--red)'
-                  : p._dte != null && p._dte <= 14 ? 'var(--yellow)' : 'var(--muted)';
+              {groups.map(g => {
+                const deltaWarn = Math.abs(g.netDelta) > 0.4;
+                const expiryColor = g.nearestDte != null && g.nearestDte <= 7 ? 'var(--red)'
+                  : g.nearestDte != null && g.nearestDte <= 14 ? 'var(--yellow)' : 'var(--muted)';
+                const nlvColor = Math.abs(g.totalNlvPct) > 50 ? 'var(--yellow)' : 'var(--text)';
                 return (
-                  <tr key={i} style={p._dte != null && p._dte <= 7 ? { background: 'rgba(239,68,68,0.04)' } : undefined}>
-                    <td style={{ fontWeight: 600 }}>{p.ticker}</td>
-                    <td style={{ color: 'var(--muted)', fontSize: 12 }}>{p.strategy}</td>
-                    <td style={{ color: 'var(--muted)' }}>{p.leg_count}</td>
-                    <td className="mono">{p.short_strike ?? '—'}</td>
-                    <td className="mono" style={{ color: 'var(--muted)' }}>{p.long_strike ?? '—'}</td>
+                  <tr key={g.ticker} style={g.nearestDte != null && g.nearestDte <= 7 ? { background: 'rgba(239,68,68,0.04)' } : undefined}>
+                    <td style={{ fontWeight: 700, fontSize: 14 }}>{g.ticker}</td>
+                    <td style={{ color: 'var(--muted)', fontSize: 12 }}>{g.legs.length}</td>
+                    <td className="mono" style={{ fontSize: 12, color: 'var(--red)' }}>{g.shortStrikes}</td>
+                    <td className="mono" style={{ fontSize: 12, color: 'var(--green)' }}>{g.longStrikes}</td>
                     <td style={{ fontSize: 12 }}>
-                      {p.expiry ?? '—'}
-                      {p._dte != null && (
-                        <span style={{ color: expiryColor, marginLeft: 6, fontSize: 11, fontWeight: p._dte <= 14 ? 600 : 400 }}>
-                          {p._dte}d
+                      {g.nearestExpiry ?? '—'}
+                      {g.nearestDte != null && (
+                        <span style={{ color: expiryColor, marginLeft: 6, fontSize: 11, fontWeight: g.nearestDte <= 14 ? 600 : 400 }}>
+                          {g.nearestDte}d
                         </span>
                       )}
                     </td>
                     <td className={`text-right mono ${deltaWarn ? 'text-yellow' : ''}`}>
-                      {p.current_delta?.toFixed(3) ?? '—'}
+                      {g.netDelta !== 0 ? (g.netDelta > 0 ? '+' : '') + g.netDelta.toFixed(3) : '0.000'}
                     </td>
-                    <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
-                    <td><AlertBadge state={p.alert_state} /></td>
+                    <td className="text-right mono" style={{ color: nlvColor }}>
+                      {g.totalNlvPct > 0 ? '+' : ''}{g.totalNlvPct.toFixed(1)}%
+                    </td>
+                    <td><AlertBadge state={g.worstAlert} /></td>
                   </tr>
                 );
               })}
