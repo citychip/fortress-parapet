@@ -106,7 +106,30 @@ export interface IbkrStatusData {
 const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
 const API_TOKEN = (import.meta.env.VITE_API_TOKEN as string) || '';
 
+// ── Module-level GET cache (30s TTL) ─────────────────────────────────────────
+// Prevents redundant fetches when navigating between pages within the TTL window.
+// Write operations (POST/DELETE/PATCH) bypass and invalidate the cache.
+const _cache = new Map<string, { data: unknown; ts: number }>();
+const CACHE_TTL_MS = 30_000;
+
+export function invalidateCache(pathPrefix?: string) {
+  if (!pathPrefix) { _cache.clear(); return; }
+  for (const key of _cache.keys()) {
+    if (key.startsWith(pathPrefix)) _cache.delete(key);
+  }
+}
+
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
+  const method = (opts?.method ?? 'GET').toUpperCase();
+  const isGet  = method === 'GET';
+
+  if (isGet) {
+    const cached = _cache.get(path);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      return cached.data as T;
+    }
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...opts,
     headers: {
@@ -120,7 +143,12 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`${res.status}: ${text}`);
   }
-  return res.json();
+  const data = await res.json();
+
+  if (isGet) _cache.set(path, { data, ts: Date.now() });
+  else invalidateCache(); // mutation — nuke everything
+
+  return data as T;
 }
 
 // ── Briefing / Overview ─────────────────────────────────────────────────────
@@ -145,6 +173,19 @@ export const getMarketIntel    = () => req<any>('/api/market-intelligence');
 export const getCalendar       = () => req<any>('/api/calendar');
 export const fetchEarnings     = () => req<any>('/api/calendar/fetch-earnings', { method: 'POST' });
 export const getQuantDataReports = () => req<any>('/api/qd/tools');
+
+export interface IvRankData {
+  ticker: string;
+  session_date: string;
+  iv_rank: number | null;
+  current_iv: number | null;
+  iv_52w_high: number | null;
+  iv_52w_low: number | null;
+  call_iv: number | null;
+  put_iv: number | null;
+}
+export const getIvRank = (ticker: string) =>
+  req<IvRankData>(`/api/qd/iv-rank/${encodeURIComponent(ticker)}`);
 
 // ── Orders ───────────────────────────────────────────────────────────────────
 export const getPendingOrders  = () => req<{ orders?: OrderData[]; pending?: OrderData[] }>('/api/orders/pending');

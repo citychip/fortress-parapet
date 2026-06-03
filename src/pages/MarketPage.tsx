@@ -4,13 +4,14 @@ import Card from '../components/Card';
 import { TabBar } from '../components/Tabs';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getMarketIntel, getCalendar, fetchEarnings, getQuantDataReports } from '../lib/api';
+import { getMarketIntel, getCalendar, fetchEarnings, getQuantDataReports, getUniverse, getIvRank, type IvRankData } from '../lib/api';
 
 export default function MarketPage() {
   const [tab, setTab]           = useState('intel');
   const [intel, setIntel]       = useState<any>(null);
   const [cal, setCal]           = useState<any>(null);
   const [qd, setQd]             = useState<any>(null);
+  const [universe, setUniverse] = useState<string[]>([]);
   const [loading, setLoading]   = useState(true);
   const [fetching, setFetching] = useState(false);
   const [error, setError]       = useState<string | null>(null);
@@ -20,12 +21,16 @@ export default function MarketPage() {
     if (!background) setLoading(true);
     setError(null);
     try {
-      const [i, c, q] = await Promise.allSettled([
-        getMarketIntel(), getCalendar(), getQuantDataReports(),
+      const [i, c, q, u] = await Promise.allSettled([
+        getMarketIntel(), getCalendar(), getQuantDataReports(), getUniverse(),
       ]);
       if (i.status === 'fulfilled') setIntel(i.value);
       if (c.status === 'fulfilled') setCal(c.value);
       if (q.status === 'fulfilled') setQd(q.value);
+      if (u.status === 'fulfilled') {
+        const raw: any[] = (u.value as any)?.tickers ?? (u.value as any)?.tier1 ?? [];
+        setUniverse(raw.map((t: any) => typeof t === 'string' ? t : (t?.ticker ?? String(t))));
+      }
       if (i.status === 'rejected') setError(String(i.reason));
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
@@ -171,7 +176,7 @@ export default function MarketPage() {
       )}
 
       {/* QUANTDATA */}
-      {tab === 'quantdata' && <QuantDataTab qd={qd} />}
+      {tab === 'quantdata' && <QuantDataTab qd={qd} universe={universe} />}
     </Layout>
   );
 }
@@ -189,7 +194,7 @@ const QD_CATEGORIES: { label: string; tools: string[] }[] = [
 
 const BROKEN_TOOLS = new Set(['exposure_by_strike','volatility_skew']);
 
-function QuantDataTab({ qd }: { qd: any }) {
+function QuantDataTab({ qd, universe }: { qd: any; universe: string[] }) {
   const toolNames: Set<string> = new Set(
     (qd?.all_tools_in_config ?? []).map((t: any) => t.name as string)
   );
@@ -294,6 +299,9 @@ function QuantDataTab({ qd }: { qd: any }) {
         </Card>
       )}
 
+      {/* IV Rank summary */}
+      {connected && <IvRankSection universe={universe} />}
+
       {/* Known issues callout */}
       <div style={{
         background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
@@ -328,6 +336,116 @@ function QuantDataTab({ qd }: { qd: any }) {
       </div>
 
     </div>
+  );
+}
+
+// ─── IV Rank Section ──────────────────────────────────────────────────────────
+
+type IvState = { status: 'idle' | 'loading' | 'ok' | 'error'; data?: IvRankData; error?: string };
+
+function IvRankSection({ universe }: { universe: string[] }) {
+  const [rows, setRows] = useState<Record<string, IvState>>({});
+  const [fetching, setFetching] = useState(false);
+
+  const loadAll = async () => {
+    if (!universe.length) return;
+    setFetching(true);
+    const init: Record<string, IvState> = {};
+    universe.forEach(t => { init[t] = { status: 'loading' }; });
+    setRows(init);
+
+    await Promise.allSettled(
+      universe.map(async ticker => {
+        try {
+          const data = await getIvRank(ticker);
+          setRows(prev => ({ ...prev, [ticker]: { status: 'ok', data } }));
+        } catch (e: any) {
+          setRows(prev => ({ ...prev, [ticker]: { status: 'error', error: String(e) } }));
+        }
+      })
+    );
+    setFetching(false);
+  };
+
+  const hasData = Object.values(rows).some(r => r.status === 'ok' || r.status === 'error');
+
+  return (
+    <Card title="IV Rank — Universe" action={
+      <button
+        onClick={loadAll}
+        disabled={fetching || !universe.length}
+        style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', color: 'var(--muted)', fontSize: 11, padding: '3px 10px' }}
+      >
+        {fetching ? '…' : hasData ? '↻ Refresh' : 'Load'}
+      </button>
+    }>
+      {!hasData && !fetching && (
+        <p style={{ color: 'var(--muted)', fontSize: 13 }}>
+          {universe.length ? `${universe.length} tickers in universe — click Load to fetch IV ranks.` : 'Universe not loaded.'}
+        </p>
+      )}
+      {hasData && (
+        <div style={{ overflowX: 'auto' }}>
+          <table>
+            <thead><tr>
+              <th>Ticker</th>
+              <th className="text-right">IV Rank</th>
+              <th className="text-right">Current IV</th>
+              <th className="text-right">52w High</th>
+              <th className="text-right">52w Low</th>
+              <th className="text-right">Call IV</th>
+              <th className="text-right">Put IV</th>
+            </tr></thead>
+            <tbody>
+              {universe.map(ticker => {
+                const row = rows[ticker];
+                if (!row || row.status === 'loading') {
+                  return (
+                    <tr key={ticker}>
+                      <td style={{ fontWeight: 600 }}>{ticker}</td>
+                      <td colSpan={6} style={{ color: 'var(--muted)', fontSize: 12 }}>loading…</td>
+                    </tr>
+                  );
+                }
+                if (row.status === 'error') {
+                  return (
+                    <tr key={ticker}>
+                      <td style={{ fontWeight: 600 }}>{ticker}</td>
+                      <td colSpan={6} style={{ color: 'var(--red)', fontSize: 12 }}>{row.error}</td>
+                    </tr>
+                  );
+                }
+                const d = row.data!;
+                const ivr = d.iv_rank;
+                const ivrColor = ivr == null ? 'var(--muted)'
+                  : ivr >= 50 ? 'var(--green)' : ivr >= 25 ? 'var(--yellow)' : 'var(--muted)';
+                const bias = d.call_iv != null && d.put_iv != null
+                  ? d.call_iv > d.put_iv ? '↑ call' : d.put_iv > d.call_iv ? '↓ put' : '='
+                  : '—';
+                const biasColor = bias === '↑ call' ? 'var(--green)' : bias === '↓ put' ? 'var(--red)' : 'var(--muted)';
+                return (
+                  <tr key={ticker}>
+                    <td style={{ fontWeight: 600 }}>{ticker}</td>
+                    <td className="text-right mono" style={{ color: ivrColor, fontWeight: 600 }}>
+                      {ivr != null ? `${ivr.toFixed(1)}` : '—'}
+                      {ivr != null && ivr >= 25 && <span style={{ marginLeft: 4, fontSize: 10 }}>✓</span>}
+                    </td>
+                    <td className="text-right mono">{d.current_iv != null ? (d.current_iv * 100).toFixed(1) + '%' : '—'}</td>
+                    <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_high != null ? (d.iv_52w_high * 100).toFixed(1) + '%' : '—'}</td>
+                    <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_low != null ? (d.iv_52w_low * 100).toFixed(1) + '%' : '—'}</td>
+                    <td className="text-right mono" style={{ fontSize: 12, color: 'var(--muted)' }}>{d.call_iv != null ? (d.call_iv * 100).toFixed(1) + '%' : '—'}</td>
+                    <td className="text-right mono" style={{ fontSize: 12, color: biasColor }}>{d.put_iv != null ? (d.put_iv * 100).toFixed(1) + '%' : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 10 }}>
+            IV Rank ≥ 25 required for new entries (✓). ≥ 50 = prime entry zone.
+          </p>
+        </div>
+      )}
+    </Card>
   );
 }
 
