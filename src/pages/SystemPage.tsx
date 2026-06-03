@@ -8,6 +8,8 @@ import { StrategyTab } from '../components/system/StrategyTab';
 import { AlertsSection } from '../components/system/AlertsSection';
 import { InfraSection } from '../components/system/InfraSection';
 import { UniverseSection } from '../components/system/UniverseSection';
+import { ConnectionsSection } from '../components/system/ConnectionsSection';
+import { ScriptsSection } from '../components/system/ScriptsSection';
 import {
   getSettings, updateSettings, getAlerts, addAlert, deleteAlert,
   listScripts, runScript, getIbkrStatus, triggerIbkrSync,
@@ -209,13 +211,15 @@ export default function SystemPage() {
     } catch (e: any) { setError(String(e)); }
   };
 
+  const [settingsSubTab, setSettingsSubTab] = useState<'connections' | 'system'>('connections');
+
   const TABS = [
-    { key: 'strategy', label: 'Strategy' },
-    { key: 'settings', label: 'Settings' },
-    { key: 'alerts',   label: 'Alerts' },
-    { key: 'scripts',  label: 'Scripts' },
-    { key: 'infra',    label: 'Infrastructure' },
-    { key: 'universe', label: 'Universe' },
+    { key: 'strategy',    label: 'Strategy' },
+    { key: 'settings',    label: 'Settings' },
+    { key: 'alerts',      label: 'Alerts' },
+    { key: 'scripts',     label: 'Scripts' },
+    { key: 'infra',       label: 'Connections' },
+    { key: 'universe',    label: 'Universe' },
   ];
 
   return (
@@ -233,30 +237,47 @@ export default function SystemPage() {
         <StrategyTab s={settings.strategy} trader={settings.trader_profile} />
       )}
 
-      {tab === 'settings' && settings && (
+      {tab === 'settings' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {Object.entries(settings)
-            .filter(([section]) => !CLAUDE_ONLY_SECTIONS.has(section))
-            .map(([section, values]: any) => {
-              const meta = SECTION_META[section];
-              return (
-                <div key={section} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-                  {/* Section header */}
-                  <div style={{ padding: '12px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {meta?.icon && <span style={{ fontSize: 15 }}>{meta.icon}</span>}
-                      <span style={{ fontWeight: 700, fontSize: 14 }}>{meta?.title ?? section.toUpperCase()}</span>
+          {/* Sub-tab bar */}
+          <div style={{ display: 'flex', gap: 2, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 4 }}>
+            {(['connections', 'system'] as const).map(st => (
+              <button key={st} onClick={() => setSettingsSubTab(st)} style={{
+                flex: 1, padding: '6px 0', borderRadius: 5, fontSize: 13, fontWeight: settingsSubTab === st ? 600 : 400,
+                background: settingsSubTab === st ? 'var(--surface2)' : 'none',
+                color: settingsSubTab === st ? 'var(--text)' : 'var(--muted)',
+                border: settingsSubTab === st ? '1px solid var(--border2)' : '1px solid transparent',
+              }}>{st.charAt(0).toUpperCase() + st.slice(1)}</button>
+            ))}
+          </div>
+
+          {/* Connections sub-tab */}
+          {settingsSubTab === 'connections' && <ConnectionsSection />}
+
+          {/* System sub-tab */}
+          {settingsSubTab === 'system' && settings && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {Object.entries(settings)
+                .filter(([section]) => !CLAUDE_ONLY_SECTIONS.has(section) && section !== 'technical')
+                .map(([section, values]: any) => {
+                  const meta = SECTION_META[section];
+                  return (
+                    <div key={section} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                      <div style={{ padding: '12px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {meta?.icon && <span style={{ fontSize: 15 }}>{meta.icon}</span>}
+                          <span style={{ fontWeight: 700, fontSize: 14 }}>{meta?.title ?? section.toUpperCase()}</span>
+                        </div>
+                        {meta?.description && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{meta.description}</p>}
+                      </div>
+                      <div style={{ padding: '16px' }}>
+                        <EditableSection section={section} values={values} onSaved={load} />
+                      </div>
                     </div>
-                    {meta?.description && (
-                      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{meta.description}</p>
-                    )}
-                  </div>
-                  <div style={{ padding: '16px' }}>
-                    <EditableSection section={section} values={values} onSaved={load} />
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })}
+            </div>
+          )}
         </div>
       )}
 
@@ -271,53 +292,12 @@ export default function SystemPage() {
       )}
 
       {tab === 'scripts' && (
-        <Card title="Automation Scripts">
-          <table>
-            <thead><tr>
-              <th>Script</th><th>File</th><th>Last Run</th><th style={{ textAlign: 'right' }}>Action</th>
-            </tr></thead>
-            <tbody>
-              {scripts.map((s: any, i: number) => {
-                const out = scriptOutput[s.key];
-                return (
-                  <>
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{s.key}</td>
-                      <td style={{ color: 'var(--muted)', fontSize: 12 }}>
-                        {s.inprocess ? <span style={{ color: 'var(--yellow)' }}>⚙ in-process</span> : s.filename}
-                      </td>
-                      <td style={{ color: 'var(--muted)', fontSize: 12 }}>{s.last_run ? new Date(s.last_run).toLocaleString() : '—'}</td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button
-                          onClick={() => handleRunScript(s.key)}
-                          disabled={running === s.key || s.inprocess}
-                          style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', color: 'var(--text)', fontSize: 12, padding: '4px 12px' }}
-                        >
-                          {running === s.key ? '…' : '▶ Run'}
-                        </button>
-                      </td>
-                    </tr>
-                    {out && (
-                      <tr key={`${i}-out`}>
-                        <td colSpan={4} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
-                          <pre style={{
-                            fontSize: 11, fontFamily: 'monospace', whiteSpace: 'pre-wrap',
-                            color: out.ok ? 'var(--green)' : 'var(--red)',
-                            background: out.ok ? 'rgba(34,197,94,0.05)' : 'rgba(239,68,68,0.05)',
-                            padding: '8px 10px', borderRadius: 5, margin: 0,
-                            border: `1px solid ${out.ok ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`,
-                          }}>
-                            {out.output}
-                          </pre>
-                        </td>
-                      </tr>
-                    )}
-                  </>
-                );
-              })}
-            </tbody>
-          </table>
-        </Card>
+        <ScriptsSection
+          scripts={scripts}
+          running={running}
+          outputs={scriptOutput}
+          onRun={handleRunScript}
+        />
       )}
 
       {tab === 'infra' && (

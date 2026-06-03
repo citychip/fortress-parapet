@@ -263,6 +263,8 @@ export const runScript         = (key: string) =>
 // ── Infrastructure ───────────────────────────────────────────────────────────
 export const triggerIbkrSync   = () => req<any>('/api/ibkr/sync', { method: 'POST' });
 export const retryIbkrSync     = () => req<any>('/api/ibkr/upload/retry', { method: 'POST' });
+export const testQuantData     = () => req<{ ok: boolean; message?: string; iv_rank?: number | null; error?: string }>('/api/settings/test_quantdata', { method: 'POST' });
+export const getApiHealth      = () => req<{ status: string; version?: string }>('/api/health');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 export function fmt$(n: number | null | undefined, decimals = 0): string {
