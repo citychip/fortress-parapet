@@ -16,8 +16,9 @@ export default function MarketPage() {
   const [error, setError]       = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true); setError(null);
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
+    setError(null);
     try {
       const [i, c, q] = await Promise.allSettled([
         getMarketIntel(), getCalendar(), getQuantDataReports(),
@@ -27,12 +28,20 @@ export default function MarketPage() {
       if (q.status === 'fulfilled') setQd(q.value);
       if (i.status === 'rejected') setError(String(i.reason));
       setUpdatedAt(new Date().toISOString());
+    } catch (e: any) {
+      setError(String(e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-refresh every 5 minutes (silent background poll)
+  useEffect(() => {
+    const id = setInterval(() => load(true), 5 * 60_000);
+    return () => clearInterval(id);
+  }, [load]);
 
   const TABS = [
     { key: 'intel',    label: 'Market Intel' },
@@ -162,20 +171,167 @@ export default function MarketPage() {
       )}
 
       {/* QUANTDATA */}
-      {tab === 'quantdata' && (
-        <Card title="QuantData Reports">
-          {!qd ? (
-            <p style={{ color: 'var(--muted)', fontSize: 13 }}>No QuantData reports available.</p>
-          ) : (
-            <pre style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'pre-wrap', maxHeight: 600, overflow: 'auto' }}>
-              {JSON.stringify(qd, null, 2)}
-            </pre>
-          )}
-        </Card>
-      )}
+      {tab === 'quantdata' && <QuantDataTab qd={qd} />}
     </Layout>
   );
 }
+
+// ─── QuantData Tab ────────────────────────────────────────────────────────────
+
+const QD_CATEGORIES: { label: string; tools: string[] }[] = [
+  { label: 'Volatility',  tools: ['iv_rank','volatility_skew','volatility_drift','term_structure','net_drift'] },
+  { label: 'Flow',        tools: ['order_flow','net_flow','dark_pool_levels','unconsolidated_flow','trade_side_stats'] },
+  { label: 'Exposure',    tools: ['exposure_by_strike','exposure_by_expiration','oi_by_strike','oi_by_expiration','oi_change','oi_over_time'] },
+  { label: 'Max Pain',    tools: ['max_pain','max_pain_over_time'] },
+  { label: 'Market',      tools: ['market_snapshot','gainers_losers','heat_map','interval_map','get_news_articles'] },
+  { label: 'Price',       tools: ['contract_price','contract_statistics','stock_price_time','get_equity_prints'] },
+];
+
+const BROKEN_TOOLS = new Set(['exposure_by_strike','volatility_skew']);
+
+function QuantDataTab({ qd }: { qd: any }) {
+  const toolNames: Set<string> = new Set(
+    (qd?.all_tools_in_config ?? []).map((t: any) => t.name as string)
+  );
+  const toolCount = qd?.config_tool_count ?? toolNames.size ?? 0;
+  const connected = toolCount > 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+      {/* Status bar */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 10, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%',
+            background: connected ? 'var(--green)' : 'var(--red)',
+            display: 'inline-block', flexShrink: 0,
+            boxShadow: connected ? '0 0 6px var(--green)' : undefined,
+          }} />
+          <span style={{ fontSize: 13, fontWeight: 600 }}>
+            {connected ? 'QuantData Connected' : 'QuantData Offline'}
+          </span>
+        </div>
+        {connected && (
+          <div style={{
+            background: 'var(--surface)', border: '1px solid var(--border)',
+            borderRadius: 10, padding: '14px 20px',
+          }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Tools</div>
+            <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'monospace' }}>{toolCount}</div>
+          </div>
+        )}
+        {qd?.config_paths_checked?.[0] && (
+          <div style={{
+            background: 'var(--surface)', border: '1px solid var(--border)',
+            borderRadius: 10, padding: '14px 20px',
+          }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Config</div>
+            <div style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--muted)' }}>
+              {qd.config_paths_checked[0].replace('/home/ubuntu','~').replace('/root','/root')}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Tool capabilities grid */}
+      {connected && (
+        <Card title="Tool Capabilities">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {QD_CATEGORIES.map(cat => {
+              const present = cat.tools.filter(t => toolNames.size === 0 || toolNames.has(t));
+              if (present.length === 0) return null;
+              return (
+                <div key={cat.label}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+                    {cat.label}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {present.map(tool => {
+                      const broken = BROKEN_TOOLS.has(tool);
+                      return (
+                        <span key={tool} style={{
+                          fontSize: 11, padding: '3px 10px', borderRadius: 20,
+                          fontFamily: 'monospace',
+                          background: broken ? 'rgba(239,68,68,0.08)' : 'rgba(99,102,241,0.1)',
+                          color: broken ? 'var(--red)' : 'var(--accent)',
+                          border: `1px solid ${broken ? 'rgba(239,68,68,0.25)' : 'rgba(99,102,241,0.25)'}`,
+                          opacity: broken ? 0.7 : 1,
+                        }}>
+                          {broken ? '⚠ ' : ''}{tool.replace(/_/g, '_')}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Uncategorised tools */}
+            {toolNames.size > 0 && (() => {
+              const all = QD_CATEGORIES.flatMap(c => c.tools);
+              const extra = [...toolNames].filter(t => !all.includes(t));
+              if (!extra.length) return null;
+              return (
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Other</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {extra.map(tool => (
+                      <span key={tool} style={{
+                        fontSize: 11, padding: '3px 10px', borderRadius: 20, fontFamily: 'monospace',
+                        background: 'rgba(99,102,241,0.1)', color: 'var(--accent)',
+                        border: '1px solid rgba(99,102,241,0.25)',
+                      }}>{tool}</span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </Card>
+      )}
+
+      {/* Known issues callout */}
+      <div style={{
+        background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
+        borderRadius: 10, padding: '14px 16px',
+        display: 'flex', gap: 12, alignItems: 'flex-start',
+      }}>
+        <span style={{ color: 'var(--red)', fontSize: 16, flexShrink: 0 }}>⚠</span>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Known issues</div>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>
+            <code style={{ fontFamily: 'monospace' }}>exposure_by_strike</code> and{' '}
+            <code style={{ fontFamily: 'monospace' }}>volatility_skew</code> return no options data during
+            market hours (price resolves, options layer empty). GitHub issue pending on quantdata-mcp.
+          </p>
+        </div>
+      </div>
+
+      {/* Live data hint */}
+      <div style={{
+        background: 'var(--surface)', border: '1px solid var(--border)',
+        borderRadius: 10, padding: '14px 16px',
+        display: 'flex', gap: 12, alignItems: 'flex-start',
+      }}>
+        <span style={{ fontSize: 16, flexShrink: 0 }}>💬</span>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Query via Claude</div>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>
+            Live QuantData signals (IV rank, order flow, dark pool, max pain) are available through Claude.
+            Try: <em>"What's the IV rank for MSFT?"</em> or <em>"Show me SPX order flow."</em>
+          </p>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
+// ─── KV chip ──────────────────────────────────────────────────────────────────
 
 function KV({ label, value, color }: { label: string; value: string; color?: string }) {
   return (

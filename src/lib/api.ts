@@ -1,3 +1,108 @@
+// ── Core data types ──────────────────────────────────────────────────────────
+
+export interface AlertData {
+  id: string;
+  ticker?: string;
+  message?: string;
+  state: 'ok' | 'watch' | 'act' | 'safe' | string;
+  condition?: string;
+  threshold?: number;
+  created_at?: string;
+}
+
+export interface PositionData {
+  ticker: string;
+  strategy?: string;
+  leg_count?: number;
+  short_strike?: number | null;
+  long_strike?: number | null;
+  expiry?: string | null;
+  current_delta?: number | null;
+  net_liq_pct?: number | null;
+  alert_state?: 'safe' | 'watch' | 'act' | string;
+  // aggregated view only
+  _legs?: PositionData[];
+}
+
+export interface PnlTickerData {
+  ticker: string;
+  pnl: number | null;
+}
+
+export interface PnLData {
+  summary?: {
+    unrealized_pnl?: number | null;
+    realized_pnl?: number | null;
+    total_pnl?: number | null;
+  };
+  by_ticker?: PnlTickerData[];
+}
+
+export interface OrderLeg {
+  action: 'BUY' | 'SELL' | string;
+  sec_type?: string;
+  right?: 'C' | 'P' | string;
+  strike?: number | null;
+  expiry?: string | null;
+  ratio?: number;
+}
+
+export interface OrderData {
+  id: string;
+  ticker?: string;
+  strategy?: string;
+  order_type?: string;
+  status?: string;
+  limit_price?: number | null;
+  quantity?: number | null;
+  max_loss?: number | null;
+  notes?: string | null;
+  created_at?: string;
+  legs?: OrderLeg[];
+}
+
+export interface RegimeSignal {
+  source: string;
+  signal: string;
+  weight: number;
+  note?: string;
+}
+
+export interface BriefingData {
+  account?: {
+    net_liq?: number | null;
+    available_funds?: number | null;
+  };
+  macro_regime?: {
+    regime?: string;
+    vix?: number | null;
+  };
+  pacing?: {
+    used?: number;
+    max_per_week?: number;
+  };
+  greeks?: {
+    portfolio_delta?: number | null;
+  };
+  actions?: Array<{ ticker?: string; id?: string; action?: string; type?: string }>;
+}
+
+export interface IbkrStatusData {
+  active_backend?: string;
+  web_api?: {
+    account?: string;
+    opra_subscribed?: boolean;
+    session_status?: {
+      authenticated?: boolean;
+      connected?: boolean;
+      established?: boolean;
+    };
+    error?: string;
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
 const API_TOKEN = (import.meta.env.VITE_API_TOKEN as string) || '';
 
@@ -19,13 +124,13 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 }
 
 // ── Briefing / Overview ─────────────────────────────────────────────────────
-export const getBriefing       = () => req<any>('/api/briefing');
-export const getIbkrStatus     = () => req<any>('/api/ibkr/capability');
+export const getBriefing   = () => req<BriefingData>('/api/briefing');
+export const getIbkrStatus = () => req<IbkrStatusData>('/api/ibkr/capability');
 
 // ── Portfolio ────────────────────────────────────────────────────────────────
 export const getPositions      = (aggregated = true) =>
-  req<any>(`/api/positions?aggregated=${aggregated}`);
-export const getPnl            = () => req<any>('/api/pnl');
+  req<{ positions: PositionData[] }>(`/api/positions?aggregated=${aggregated}`);
+export const getPnl            = () => req<PnLData>('/api/pnl');
 export const getPnlHistory     = () => req<any>('/api/pnl/history');
 export const getPortfolioBeta  = () => req<any>('/api/portfolio/beta');
 export const getSectorExposure = () => req<any>('/api/portfolio/sector-exposure');
@@ -42,14 +147,14 @@ export const fetchEarnings     = () => req<any>('/api/calendar/fetch-earnings', 
 export const getQuantDataReports = () => req<any>('/api/qd/tools');
 
 // ── Orders ───────────────────────────────────────────────────────────────────
-export const getPendingOrders  = () => req<any>('/api/orders/pending');
+export const getPendingOrders  = () => req<{ orders?: OrderData[]; pending?: OrderData[] }>('/api/orders/pending');
 export const approveOrder      = (id: string) =>
   req<any>(`/api/orders/pending/${id}/approve`, { method: 'POST' });
 export const declineOrder      = (id: string) =>
   req<any>(`/api/orders/pending/${id}`, { method: 'DELETE' });
 
 // ── Alerts ───────────────────────────────────────────────────────────────────
-export const getAlerts         = () => req<any>('/api/alerts');
+export const getAlerts         = () => req<{ alerts: AlertData[] }>('/api/alerts');
 export const addAlert          = (body: any) =>
   req<any>('/api/alerts', { method: 'POST', body: JSON.stringify(body) });
 export const deleteAlert       = (id: string) =>
@@ -58,7 +163,7 @@ export const deleteAlert       = (id: string) =>
 // ── Settings ─────────────────────────────────────────────────────────────────
 export const getSettings       = () => req<any>('/api/settings');
 export const updateSettings    = (section: string, data: any) =>
-  req<any>(`/api/settings/${section}`, { method: 'PUT', body: JSON.stringify({ values: data }) });
+  req<any>(`/api/settings/${section}`, { method: 'PATCH', body: JSON.stringify(data) });
 
 // ── Universe ─────────────────────────────────────────────────────────────────
 export const getUniverse       = () => req<any>('/api/universe');
@@ -101,4 +206,3 @@ export function clsN(n: number | null | undefined): string {
   if (n == null) return '';
   return n >= 0 ? 'text-green' : 'text-red';
 }
-

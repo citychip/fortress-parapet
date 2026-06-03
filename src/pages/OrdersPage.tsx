@@ -3,31 +3,37 @@ import Layout from '../components/Layout';
 import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getPendingOrders, approveOrder, declineOrder, fmt$ } from '../lib/api';
+import { getPendingOrders, approveOrder, declineOrder, fmt$, type OrderData } from '../lib/api';
 
 export default function OrdersPage() {
-  const [orders, setOrders]     = useState<any[]>([]);
+  const [orders, setOrders]     = useState<OrderData[]>([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
   const [acting, setActing]     = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true); setError(null);
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
+    setError(null);
     try {
       const data = await getPendingOrders();
-      const all: any[] = data?.orders ?? data?.pending ?? (Array.isArray(data) ? data : []);
-      // Only show truly pending orders
-      setOrders(all.filter((o: any) => !o.status || o.status === 'pending'));
+      const all: OrderData[] = data?.orders ?? data?.pending ?? [];
+      setOrders(all.filter(o => !o.status || o.status === 'pending'));
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
       setError(String(e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Poll every 15s so staged orders appear without manual refresh
+  useEffect(() => {
+    const id = setInterval(() => load(true), 15_000);
+    return () => clearInterval(id);
+  }, [load]);
 
   const handleApprove = async (id: string) => {
     setActing(id);

@@ -4,19 +4,19 @@ import StatRow from '../components/StatRow';
 import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getBriefing, getIbkrStatus, getAlerts, getPositions, fmt$, fmtDelta } from '../lib/api';
+import { getBriefing, getIbkrStatus, getAlerts, getPositions, fmt$, fmtDelta, type BriefingData, type IbkrStatusData, type AlertData, type PositionData } from '../lib/api';
 
 export default function OverviewPage() {
-  const [briefing, setBriefing]   = useState<any>(null);
-  const [ibkr, setIbkr]           = useState<any>(null);
-  const [alerts, setAlerts]       = useState<any[]>([]);
-  const [positions, setPositions] = useState<any[]>([]);
+  const [briefing, setBriefing]   = useState<BriefingData | null>(null);
+  const [ibkr, setIbkr]           = useState<IbkrStatusData | null>(null);
+  const [alerts, setAlerts]       = useState<AlertData[]>([]);
+  const [positions, setPositions] = useState<PositionData[]>([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
     setError(null);
     try {
       const [b, i, a, p] = await Promise.allSettled([
@@ -28,12 +28,20 @@ export default function OverviewPage() {
       if (p.status === 'fulfilled') setPositions(p.value?.positions ?? []);
       if (b.status === 'rejected') setError(String(b.reason));
       setUpdatedAt(new Date().toISOString());
+    } catch (e: any) {
+      setError(String(e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-refresh every 30 seconds (silent background poll)
+  useEffect(() => {
+    const id = setInterval(() => load(true), 30_000);
+    return () => clearInterval(id);
+  }, [load]);
 
   const nlv     = briefing?.account?.net_liq;
   const avail   = briefing?.account?.available_funds;
@@ -46,6 +54,11 @@ export default function OverviewPage() {
   const ibkrOk  = ibkr?.web_api?.session_status?.authenticated;
 
   const activeAlerts = alerts.filter(a => a.state !== 'ok' && a.state !== 'safe');
+
+  const nearExpiry = positions
+    .map(p => ({ ...p, _dte: p.expiry ? Math.ceil((new Date(p.expiry).getTime() - Date.now()) / 86400000) : null }))
+    .filter(p => p._dte != null && p._dte <= 14)
+    .sort((a, b) => (a._dte ?? 99) - (b._dte ?? 99));
 
   const deltaColor = Math.abs(totalDelta) > 1000 ? 'var(--yellow)' :
                      totalDelta >= 0 ? 'var(--green)' : 'var(--red)';
@@ -72,6 +85,27 @@ export default function OverviewPage() {
             { label: 'Regime',    value: String(regime).toUpperCase(), color: 'var(--muted)' },
             { label: 'Pacing',    value: String(pacing) },
           ]} />
+
+          {/* Near-expiry banner */}
+          {nearExpiry.length > 0 && (
+            <div style={{
+              padding: '10px 14px', borderRadius: 8,
+              background: nearExpiry[0]._dte! <= 7 ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.06)',
+              border: `1px solid ${nearExpiry[0]._dte! <= 7 ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.25)'}`,
+              display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap',
+            }}>
+              <span style={{ color: nearExpiry[0]._dte! <= 7 ? 'var(--red)' : 'var(--yellow)', fontWeight: 600 }}>
+                {nearExpiry[0]._dte! <= 7 ? '⚠ Expiring soon:' : 'Near expiry:'}
+              </span>
+              {nearExpiry.map(p => (
+                <span key={p.ticker + p.expiry} style={{
+                  fontFamily: 'monospace', fontSize: 12, padding: '2px 8px', borderRadius: 4,
+                  background: p._dte! <= 7 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.12)',
+                  color: p._dte! <= 7 ? 'var(--red)' : 'var(--yellow)', fontWeight: 600,
+                }}>{p.ticker} {p._dte}d</span>
+              ))}
+            </div>
+          )}
 
           {/* Alerts */}
           {activeAlerts.length > 0 && (
@@ -187,9 +221,9 @@ export default function OverviewPage() {
           </Card>
 
           {/* Priority orders from briefing */}
-          {briefing?.actions?.length > 0 && (
-            <Card title={`Actions (${briefing.actions.length})`}>
-              {briefing.actions.map((o: any, i: number) => (
+          {(briefing?.actions?.length ?? 0) > 0 && (
+            <Card title={`Actions (${briefing?.actions?.length})`}>
+              {briefing?.actions?.map((o, i) => (
                 <div key={i} style={{
                   padding: '8px 0', borderBottom: '1px solid var(--border)',
                   fontSize: 13, display: 'flex', gap: 10,

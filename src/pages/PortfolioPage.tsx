@@ -7,13 +7,14 @@ import ErrorBanner from '../components/ErrorBanner';
 import {
   getPositions, getPnl, getSectorExposure, getPortfolioBeta,
   getJournal, addJournalEntry, fmt$, fmtPct, clsN,
+  type PositionData, type PnLData,
 } from '../lib/api';
 
 export default function PortfolioPage() {
   const [tab, setTab] = useState('positions');
-  const [positions, setPositions] = useState<any[]>([]);
-  const [posLegs, setPosLegs]     = useState<any[]>([]);
-  const [pnl, setPnl]             = useState<any>(null);
+  const [positions, setPositions] = useState<PositionData[]>([]);
+  const [posLegs, setPosLegs]     = useState<PositionData[]>([]);
+  const [pnl, setPnl]             = useState<PnLData | null>(null);
   const [sector, setSector]       = useState<any>(null);
   const [beta, setBeta]           = useState<any>(null);
   const [journal, setJournal]     = useState<any[]>([]);
@@ -23,8 +24,9 @@ export default function PortfolioPage() {
   const [journalNote, setJournalNote] = useState('');
   const [journalSaving, setJournalSaving] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true); setError(null);
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
+    setError(null);
     try {
       const results = await Promise.allSettled([
         getPositions(true), getPositions(false), getPnl(),
@@ -40,11 +42,17 @@ export default function PortfolioPage() {
     } catch (e: any) {
       setError(String(e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-refresh every 5 minutes (silent background poll)
+  useEffect(() => {
+    const id = setInterval(() => load(true), 5 * 60_000);
+    return () => clearInterval(id);
+  }, [load]);
 
   const saveJournal = async () => {
     if (!journalNote.trim()) return;
@@ -80,51 +88,7 @@ export default function PortfolioPage() {
 
       {/* POSITIONS TAB */}
       {tab === 'positions' && (
-        <Card>
-          <div style={{ overflowX: 'auto' }}>
-            <table>
-              <thead><tr>
-                <th>Ticker</th><th>Strategy</th><th>Legs</th>
-                <th>Short</th><th>Long</th><th>Expiry</th>
-                <th className="text-right">Delta</th>
-                <th className="text-right">NLV%</th>
-                <th>Alert</th>
-              </tr></thead>
-              <tbody>
-                {positions.map((p, i) => {
-                  const daysToExp = p.expiry
-                    ? Math.ceil((new Date(p.expiry).getTime() - Date.now()) / 86400000)
-                    : null;
-                  const deltaWarn = p.current_delta && Math.abs(p.current_delta) > 0.4;
-                  return (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{p.ticker}</td>
-                      <td style={{ color: 'var(--muted)', fontSize: 12 }}>{p.strategy}</td>
-                      <td style={{ color: 'var(--muted)' }}>{p.leg_count}</td>
-                      <td className="mono">{p.short_strike ?? '—'}</td>
-                      <td className="mono" style={{ color: 'var(--muted)' }}>{p.long_strike ?? '—'}</td>
-                      <td style={{ fontSize: 12 }}>
-                        {p.expiry ?? '—'}
-                        {daysToExp != null && (
-                          <span style={{ color: daysToExp < 14 ? 'var(--yellow)' : 'var(--muted)', marginLeft: 6, fontSize: 11 }}>
-                            {daysToExp}d
-                          </span>
-                        )}
-                      </td>
-                      <td className={`text-right mono ${deltaWarn ? 'text-yellow' : ''}`}>
-                        {p.current_delta?.toFixed(3) ?? '—'}
-                      </td>
-                      <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
-                      <td>
-                        <AlertBadge state={p.alert_state} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+        <PositionsTab positions={positions} />
       )}
 
       {/* LEGS TAB */}
@@ -159,42 +123,59 @@ export default function PortfolioPage() {
       )}
 
       {/* P&L TAB */}
-      {tab === 'pnl' && pnl && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Summary */}
-          <div style={{ display: 'flex', gap: 16 }}>
-            {[
-              { label: 'Total Unrealized', value: fmt$(pnl.summary?.unrealized_pnl), color: clsN(pnl.summary?.unrealized_pnl) },
-              { label: 'Realized', value: fmt$(pnl.summary?.realized_pnl), color: clsN(pnl.summary?.realized_pnl) },
-              { label: 'Total', value: fmt$(pnl.summary?.total_pnl), color: clsN(pnl.summary?.total_pnl) },
-            ].map((s, i) => (
-              <div key={i} style={{
-                flex: 1, background: 'var(--surface)', border: '1px solid var(--border)',
-                borderRadius: 10, padding: '16px 20px',
+      {tab === 'pnl' && pnl && (() => {
+        const byTickerSum = (pnl.by_ticker ?? []).reduce((s, t) => s + (t.pnl ?? 0), 0);
+        const summaryTotal = pnl.summary?.total_pnl ?? null;
+        const discrepancy = summaryTotal != null ? Math.abs(byTickerSum - summaryTotal) : 0;
+        const hasDiscrepancy = summaryTotal != null && discrepancy > 1;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* Cross-check warning */}
+            {hasDiscrepancy && (
+              <div style={{
+                padding: '10px 14px', borderRadius: 8,
+                background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)',
+                fontSize: 13, color: 'var(--yellow)',
               }}>
-                <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 8 }}>{s.label}</div>
-                <div className={`mono ${s.color}`} style={{ fontSize: 22, fontWeight: 700 }}>{s.value}</div>
+                ⚠ P&L mismatch: by-ticker sum {fmt$(byTickerSum)} vs summary total {fmt$(summaryTotal)} (Δ {fmt$(discrepancy)})
               </div>
-            ))}
+            )}
+            {/* Summary */}
+            <div style={{ display: 'flex', gap: 16 }}>
+              {[
+                { label: 'Total Unrealized', value: fmt$(pnl.summary?.unrealized_pnl), color: clsN(pnl.summary?.unrealized_pnl) },
+                { label: 'Realized',         value: fmt$(pnl.summary?.realized_pnl),   color: clsN(pnl.summary?.realized_pnl) },
+                { label: 'Total',            value: fmt$(pnl.summary?.total_pnl),      color: clsN(pnl.summary?.total_pnl) },
+                { label: 'By-Ticker Sum',    value: fmt$(byTickerSum),                 color: clsN(byTickerSum) },
+              ].map((s, i) => (
+                <div key={i} style={{
+                  flex: 1, background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 10, padding: '16px 20px',
+                }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 8 }}>{s.label}</div>
+                  <div className={`mono ${s.color}`} style={{ fontSize: 22, fontWeight: 700 }}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+            {/* By ticker */}
+            <Card title="By Ticker">
+              <table>
+                <thead><tr><th>Ticker</th><th className="text-right">P&L</th></tr></thead>
+                <tbody>
+                  {(pnl.by_ticker ?? [])
+                    .sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0))
+                    .map((t, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600 }}>{t.ticker}</td>
+                        <td className={`text-right mono ${clsN(t.pnl)}`}>{fmt$(t.pnl)}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </Card>
           </div>
-          {/* By ticker */}
-          <Card title="By Ticker">
-            <table>
-              <thead><tr><th>Ticker</th><th className="text-right">P&L</th></tr></thead>
-              <tbody>
-                {(pnl.by_ticker ?? [])
-                  .sort((a: any, b: any) => (b.pnl ?? 0) - (a.pnl ?? 0))
-                  .map((t: any, i: number) => (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{t.ticker}</td>
-                      <td className={`text-right mono ${clsN(t.pnl)}`}>{fmt$(t.pnl)}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </Card>
-        </div>
-      )}
+        );
+      })()}
 
       {/* EXPOSURE TAB */}
       {tab === 'exposure' && (
@@ -324,6 +305,92 @@ export default function PortfolioPage() {
         </div>
       )}
     </Layout>
+  );
+}
+
+function PositionsTab({ positions }: { positions: any[] }) {
+  const withDte = positions.map(p => ({
+    ...p,
+    _dte: p.expiry ? Math.ceil((new Date(p.expiry).getTime() - Date.now()) / 86400000) : null as number | null,
+  }));
+  const critical = withDte.filter(p => p._dte != null && p._dte <= 7);
+  const warning  = withDte.filter(p => p._dte != null && p._dte > 7 && p._dte <= 14);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {critical.length > 0 && (
+        <div style={{
+          padding: '10px 14px', borderRadius: 8,
+          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
+          display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap',
+        }}>
+          <span style={{ color: 'var(--red)', fontWeight: 700 }}>⚠ Expiring soon (≤7d):</span>
+          {critical.map(p => (
+            <span key={p.ticker + p.expiry} style={{
+              fontFamily: 'monospace', fontSize: 12, padding: '2px 8px', borderRadius: 4,
+              background: 'rgba(239,68,68,0.15)', color: 'var(--red)', fontWeight: 600,
+            }}>{p.ticker} {p._dte}d</span>
+          ))}
+        </div>
+      )}
+      {warning.length > 0 && (
+        <div style={{
+          padding: '10px 14px', borderRadius: 8,
+          background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)',
+          display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap',
+        }}>
+          <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>Near expiry (≤14d):</span>
+          {warning.map(p => (
+            <span key={p.ticker + p.expiry} style={{
+              fontFamily: 'monospace', fontSize: 12, padding: '2px 8px', borderRadius: 4,
+              background: 'rgba(245,158,11,0.12)', color: 'var(--yellow)', fontWeight: 600,
+            }}>{p.ticker} {p._dte}d</span>
+          ))}
+        </div>
+      )}
+      <Card>
+        <div style={{ overflowX: 'auto' }}>
+          <table>
+            <thead><tr>
+              <th>Ticker</th><th>Strategy</th><th>Legs</th>
+              <th>Short</th><th>Long</th><th>Expiry</th>
+              <th className="text-right">Delta</th>
+              <th className="text-right">NLV%</th>
+              <th>Alert</th>
+            </tr></thead>
+            <tbody>
+              {withDte.map((p, i) => {
+                const deltaWarn = p.current_delta && Math.abs(p.current_delta) > 0.4;
+                const expiryColor = p._dte != null && p._dte <= 7 ? 'var(--red)'
+                  : p._dte != null && p._dte <= 14 ? 'var(--yellow)' : 'var(--muted)';
+                return (
+                  <tr key={i} style={p._dte != null && p._dte <= 7 ? { background: 'rgba(239,68,68,0.04)' } : undefined}>
+                    <td style={{ fontWeight: 600 }}>{p.ticker}</td>
+                    <td style={{ color: 'var(--muted)', fontSize: 12 }}>{p.strategy}</td>
+                    <td style={{ color: 'var(--muted)' }}>{p.leg_count}</td>
+                    <td className="mono">{p.short_strike ?? '—'}</td>
+                    <td className="mono" style={{ color: 'var(--muted)' }}>{p.long_strike ?? '—'}</td>
+                    <td style={{ fontSize: 12 }}>
+                      {p.expiry ?? '—'}
+                      {p._dte != null && (
+                        <span style={{ color: expiryColor, marginLeft: 6, fontSize: 11, fontWeight: p._dte <= 14 ? 600 : 400 }}>
+                          {p._dte}d
+                        </span>
+                      )}
+                    </td>
+                    <td className={`text-right mono ${deltaWarn ? 'text-yellow' : ''}`}>
+                      {p.current_delta?.toFixed(3) ?? '—'}
+                    </td>
+                    <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
+                    <td><AlertBadge state={p.alert_state} /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
   );
 }
 
