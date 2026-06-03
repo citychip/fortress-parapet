@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useSortable, SortTh } from '../components/Sortable';
 import Layout from '../components/Layout';
 import Card from '../components/Card';
 import { TabBar } from '../components/Tabs';
@@ -141,36 +142,7 @@ export default function MarketPage() {
           {!cal ? (
             <p style={{ color: 'var(--muted)', fontSize: 13 }}>No calendar data. Hit Fetch to load.</p>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table>
-                <thead><tr>
-                  <th>Ticker</th><th>Next Earnings</th><th className="text-right">DTE</th><th>Status</th><th>Notes</th>
-                </tr></thead>
-                <tbody>
-                  {Object.entries(cal?.tickers ?? {})
-                    .sort(([,a]: any, [,b]: any) => (a.days_to_earnings ?? 999) - (b.days_to_earnings ?? 999))
-                    .map(([ticker, e]: any, i: number) => {
-                      const statusColor = e.status === 'blackout' ? 'var(--red)' : e.status === 'warning' ? 'var(--yellow)' : 'var(--green)';
-                      const statusBg   = e.status === 'blackout' ? 'rgba(239,68,68,0.1)' : e.status === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
-                      return (
-                        <tr key={i}>
-                          <td style={{ fontWeight: 600 }}>{ticker}</td>
-                          <td className="mono">{e.next_earnings ?? '—'}</td>
-                          <td className="text-right mono" style={{ color: (e.days_to_earnings ?? 99) < 14 ? 'var(--yellow)' : 'var(--muted)' }}>
-                            {e.days_to_earnings ?? '—'}d
-                          </td>
-                          <td>
-                            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: statusBg, color: statusColor, fontWeight: 600, textTransform: 'uppercase' }}>
-                              {e.status ?? '—'}
-                            </span>
-                          </td>
-                          <td style={{ color: 'var(--muted)', fontSize: 12 }}>{e.notes ?? '—'}</td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
+            <EarningsTable cal={cal} />
           )}
         </Card>
       )}
@@ -335,6 +307,56 @@ function QuantDataTab({ qd, universe }: { qd: any; universe: string[] }) {
         </div>
       </div>
 
+    </div>
+  );
+}
+
+// ─── Earnings Table ───────────────────────────────────────────────────────────
+
+function EarningsTable({ cal }: { cal: any }) {
+  const rawRows = Object.entries(cal?.tickers ?? {}).map(([ticker, e]: any) => ({
+    ticker,
+    next_earnings: e.next_earnings ?? null,
+    days_to_earnings: e.days_to_earnings ?? null,
+    status: e.status ?? null,
+    notes: e.notes ?? null,
+  }));
+  const { sorted, key, dir, toggle } = useSortable(rawRows, 'days_to_earnings', 'asc');
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table>
+        <thead><tr>
+          <SortTh label="Ticker"        sortKey="ticker"           activeKey={key} dir={dir} onToggle={toggle} />
+          <SortTh label="Next Earnings" sortKey="next_earnings"    activeKey={key} dir={dir} onToggle={toggle} />
+          <SortTh label="DTE"           sortKey="days_to_earnings" activeKey={key} dir={dir} onToggle={toggle} align="right" />
+          <SortTh label="Status"        sortKey="status"           activeKey={key} dir={dir} onToggle={toggle} />
+          <th>Notes</th>
+        </tr></thead>
+        <tbody>
+          {sorted.map((e, i) => {
+            const statusColor = e.status === 'blackout' ? 'var(--red)' : e.status === 'warning' ? 'var(--yellow)' : 'var(--green)';
+            const statusBg   = e.status === 'blackout' ? 'rgba(239,68,68,0.1)' : e.status === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
+            return (
+              <tr key={i}>
+                <td style={{ fontWeight: 600 }}>{e.ticker}</td>
+                <td className="mono">{e.next_earnings ?? '—'}</td>
+                <td className="text-right mono" style={{ color: (e.days_to_earnings ?? 99) < 14 ? 'var(--yellow)' : 'var(--muted)' }}>
+                  {e.days_to_earnings != null ? `${e.days_to_earnings}d` : '—'}
+                </td>
+                <td>
+                  {e.status && (
+                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: statusBg, color: statusColor, fontWeight: 600, textTransform: 'uppercase' }}>
+                      {e.status}
+                    </span>
+                  )}
+                </td>
+                <td style={{ color: 'var(--muted)', fontSize: 12 }}>{e.notes ?? '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

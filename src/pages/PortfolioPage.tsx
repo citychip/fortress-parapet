@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, type ReactNode } from 'react';
+import { useSortable, SortTh } from '../components/Sortable';
 import Layout from '../components/Layout';
 import Card from '../components/Card';
 import { TabBar } from '../components/Tabs';
@@ -95,56 +96,7 @@ export default function PortfolioPage() {
       )}
 
       {/* LEGS TAB */}
-      {tab === 'legs' && (
-        <Card>
-          <div style={{ overflowX: 'auto' }}>
-            <table>
-              <thead><tr>
-                <th>Ticker</th>
-                <th>Dir</th>
-                <th>Type</th>
-                <th className="text-right">Strike</th>
-                <th>Expiry</th>
-                <th className="text-right">Qty</th>
-                <th className="text-right">Delta</th>
-                <th className="text-right">Mkt Val</th>
-                <th className="text-right">NLV%</th>
-                <th>Alert</th>
-              </tr></thead>
-              <tbody>
-                {posLegs.map((p, i) => {
-                  const isShort = p.leg_direction === 'short';
-                  const dirColor = isShort ? 'var(--red)' : 'var(--green)';
-                  return (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{p.ticker}</td>
-                      <td style={{ color: dirColor, fontWeight: 600, fontSize: 12 }}>
-                        {isShort ? 'SHORT' : 'LONG'}
-                      </td>
-                      <td className="mono" style={{ fontSize: 12 }}>
-                        {p.right ? `${p.right === 'C' ? 'Call' : p.right === 'P' ? 'Put' : p.right}` : (p.strategy ?? '—')}
-                      </td>
-                      <td className="text-right mono">
-                        {p.strike != null && p.strike !== 0 ? p.strike : '—'}
-                      </td>
-                      <td style={{ fontSize: 12, color: 'var(--muted)' }}>{p.expiry ?? '—'}</td>
-                      <td className="text-right mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
-                        {p.qty != null ? (p.qty > 0 ? `+${p.qty}` : p.qty) : '—'}
-                      </td>
-                      <td className="text-right mono">{p.current_delta?.toFixed(3) ?? '—'}</td>
-                      <td className={`text-right mono ${p.market_value != null ? clsN(p.market_value) : ''}`} style={{ fontSize: 12 }}>
-                        {p.market_value != null ? fmt$(p.market_value, 0) : '—'}
-                      </td>
-                      <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
-                      <td><AlertBadge state={p.alert_state} /></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
+      {tab === 'legs' && <LegsTab legs={posLegs} />}
 
       {/* P&L TAB — client-side computation from legs */}
       {tab === 'pnl' && <PnlTab legs={posLegs} />}
@@ -288,6 +240,60 @@ function computeLegPnl(leg: any): number {
   const mv = Number(leg.market_value ?? 0);
   const costBasis = avgCost * Math.abs(qty);
   return qty < 0 ? costBasis + mv : mv - costBasis;
+}
+
+function LegsTab({ legs }: { legs: any[] }) {
+  const rows = legs.map(p => ({
+    ...p,
+    _type: p.right === 'C' ? 'Call' : p.right === 'P' ? 'Put' : (p.strategy ?? ''),
+    _dir: p.leg_direction === 'short' ? 0 : 1, // for sort: 0=short first
+  }));
+  const { sorted, key, dir, toggle } = useSortable(rows, 'ticker', 'asc');
+
+  return (
+    <Card>
+      <div style={{ overflowX: 'auto' }}>
+        <table>
+          <thead><tr>
+            <SortTh label="Ticker"   sortKey="ticker"         activeKey={key} dir={dir} onToggle={toggle} />
+            <SortTh label="Dir"      sortKey="leg_direction"  activeKey={key} dir={dir} onToggle={toggle} />
+            <SortTh label="Type"     sortKey="_type"          activeKey={key} dir={dir} onToggle={toggle} />
+            <SortTh label="Strike"   sortKey="strike"         activeKey={key} dir={dir} onToggle={toggle} align="right" />
+            <SortTh label="Expiry"   sortKey="expiry"         activeKey={key} dir={dir} onToggle={toggle} />
+            <SortTh label="Qty"      sortKey="qty"            activeKey={key} dir={dir} onToggle={toggle} align="right" />
+            <SortTh label="Delta"    sortKey="current_delta"  activeKey={key} dir={dir} onToggle={toggle} align="right" />
+            <SortTh label="Mkt Val"  sortKey="market_value"   activeKey={key} dir={dir} onToggle={toggle} align="right" />
+            <SortTh label="NLV%"     sortKey="net_liq_pct"    activeKey={key} dir={dir} onToggle={toggle} align="right" />
+            <th>Alert</th>
+          </tr></thead>
+          <tbody>
+            {sorted.map((p: any, i: number) => {
+              const isShort = p.leg_direction === 'short';
+              const dirColor = isShort ? 'var(--red)' : 'var(--green)';
+              return (
+                <tr key={i}>
+                  <td style={{ fontWeight: 600 }}>{p.ticker}</td>
+                  <td style={{ color: dirColor, fontWeight: 600, fontSize: 12 }}>{isShort ? 'SHORT' : 'LONG'}</td>
+                  <td className="mono" style={{ fontSize: 12 }}>{p._type || '—'}</td>
+                  <td className="text-right mono">{p.strike != null && p.strike !== 0 ? p.strike : '—'}</td>
+                  <td style={{ fontSize: 12, color: 'var(--muted)' }}>{p.expiry ?? '—'}</td>
+                  <td className="text-right mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
+                    {p.qty != null ? (p.qty > 0 ? `+${p.qty}` : p.qty) : '—'}
+                  </td>
+                  <td className="text-right mono">{p.current_delta?.toFixed(3) ?? '—'}</td>
+                  <td className={`text-right mono ${p.market_value != null ? clsN(p.market_value) : ''}`} style={{ fontSize: 12 }}>
+                    {p.market_value != null ? fmt$(p.market_value, 0) : '—'}
+                  </td>
+                  <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
+                  <td><AlertBadge state={p.alert_state} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
 }
 
 function PnlTab({ legs }: { legs: any[] }) {

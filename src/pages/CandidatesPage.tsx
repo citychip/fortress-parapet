@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useSortable, SortTh } from '../components/Sortable';
 import Layout from '../components/Layout';
 import Card from '../components/Card';
 import Spinner from '../components/Spinner';
@@ -88,11 +89,15 @@ export default function CandidatesPage() {
   const blocked = rows.filter(r => !r.can_trade);
   const visible = filter === 'ready' ? ready : filter === 'blocked' ? blocked : rows;
 
-  // Sort: ready first by IVR desc, then blocked
-  const sorted = [...visible].sort((a, b) => {
-    if (a.can_trade !== b.can_trade) return a.can_trade ? -1 : 1;
-    return (b.ivr ?? 0) - (a.ivr ?? 0);
-  });
+  const { sorted: tableSorted, key: sortKey, dir: sortDir, toggle } = useSortable(visible, 'ivr', 'desc');
+  // When no column sort active, keep ready-first default
+  const sorted = useMemo(() => {
+    if (sortKey) return tableSorted;
+    return [...visible].sort((a, b) => {
+      if (a.can_trade !== b.can_trade) return a.can_trade ? -1 : 1;
+      return (b.ivr ?? 0) - (a.ivr ?? 0);
+    });
+  }, [tableSorted, sortKey, visible]);
 
   return (
     <Layout title="Candidates" onRefresh={load} loading={loading} lastUpdated={updatedAt}>
@@ -151,14 +156,14 @@ export default function CandidatesPage() {
           <div style={{ overflowX: 'auto' }}>
             <table>
               <thead><tr>
-                <th>Ticker</th>
-                <th className="text-right">Price</th>
-                <th>IVR</th>
-                <th className="text-right">IV</th>
-                <th className="text-right">HV20</th>
-                <th className="text-right">Spread</th>
-                <th className="text-right">Earnings</th>
-                <th className="text-right">Conc%</th>
+                <SortTh label="Ticker"   sortKey="ticker"            activeKey={sortKey} dir={sortDir} onToggle={toggle} />
+                <SortTh label="Price"    sortKey="price"             activeKey={sortKey} dir={sortDir} onToggle={toggle} align="right" />
+                <SortTh label="IVR"      sortKey="ivr"               activeKey={sortKey} dir={sortDir} onToggle={toggle} />
+                <SortTh label="IV"       sortKey="current_iv"        activeKey={sortKey} dir={sortDir} onToggle={toggle} align="right" />
+                <SortTh label="HV20"     sortKey="hv20"              activeKey={sortKey} dir={sortDir} onToggle={toggle} align="right" />
+                <SortTh label="Spread"   sortKey="spread_pp"         activeKey={sortKey} dir={sortDir} onToggle={toggle} align="right" />
+                <SortTh label="Earnings" sortKey="days_to_earnings"  activeKey={sortKey} dir={sortDir} onToggle={toggle} align="right" />
+                <SortTh label="Conc%"    sortKey="concentration_pct" activeKey={sortKey} dir={sortDir} onToggle={toggle} align="right" />
                 <th>Gate</th>
                 <th>Signal</th>
               </tr></thead>

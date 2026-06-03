@@ -37,6 +37,7 @@ export function UniverseSection({ universe, onRefresh }: Props) {
   const [excludeTarget, setExcludeTarget] = useState<string | null>(null);
   const [excludeReason, setExcludeReason] = useState('manual');
   const [excludeNote, setExcludeNote]    = useState('');
+  const [sortAsc, setSortAsc]         = useState<Record<string, boolean>>({});
 
   const busy = (key: string) => { setActing(key); setErr(null); };
   const done = () => { setActing(null); onRefresh(); };
@@ -123,7 +124,13 @@ export function UniverseSection({ universe, onRefresh }: Props) {
       {/* Tier sections */}
       {TIERS.map(tier => {
         const raw: any[] = universe?.[tier.key] ?? [];
-        const tickers = parseTickers(raw);
+        const unsorted = parseTickers(raw);
+        const asc = sortAsc[tier.key] ?? false;
+        const tickers = asc ? [...unsorted].sort() : [...unsorted].sort().reverse();
+        // Keep original order unless explicitly sorted — default to original
+        const displayed = sortAsc[tier.key] !== undefined
+          ? tickers
+          : unsorted;
         return (
           <div key={tier.key} style={{
             border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden',
@@ -131,23 +138,42 @@ export function UniverseSection({ universe, onRefresh }: Props) {
             {/* Tier header */}
             <div style={{
               padding: '10px 16px', background: 'var(--surface2)',
-              borderBottom: tickers.length > 0 ? '1px solid var(--border)' : undefined,
+              borderBottom: displayed.length > 0 ? '1px solid var(--border)' : undefined,
               display: 'flex', alignItems: 'center', gap: 10,
             }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: tier.color }}>{tier.label}</span>
               <span style={{ fontSize: 11, color: 'var(--muted)' }}>— {tier.desc}</span>
+              <span style={{ flex: 1 }} />
+              {/* Sort toggle */}
+              <button
+                onClick={() => setSortAsc(prev => {
+                  const current = prev[tier.key];
+                  if (current === undefined) return { ...prev, [tier.key]: true };   // first click: A→Z
+                  if (current === true)      return { ...prev, [tier.key]: false };  // second: Z→A
+                  const next = { ...prev }; delete next[tier.key]; return next;       // third: original
+                })}
+                style={{
+                  fontSize: 11, padding: '2px 8px', borderRadius: 4,
+                  background: sortAsc[tier.key] !== undefined ? tier.bg : 'var(--surface2)',
+                  color: sortAsc[tier.key] !== undefined ? tier.color : 'var(--muted)',
+                  border: `1px solid ${sortAsc[tier.key] !== undefined ? tier.border : 'var(--border2)'}`,
+                }}
+                title="Toggle sort: original → A→Z → Z→A → original"
+              >
+                {sortAsc[tier.key] === undefined ? 'A–Z' : sortAsc[tier.key] ? 'A→Z ✓' : 'Z→A ✓'}
+              </button>
               <span style={{
-                marginLeft: 'auto', fontSize: 11, fontFamily: 'monospace',
+                fontSize: 11, fontFamily: 'monospace',
                 padding: '1px 8px', borderRadius: 10,
                 background: tier.bg, color: tier.color, border: `1px solid ${tier.border}`,
-              }}>{tickers.length}</span>
+              }}>{displayed.length}</span>
             </div>
 
             {/* Tickers */}
             <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: 52 }}>
-              {tickers.length === 0
+              {displayed.length === 0
                 ? <span style={{ fontSize: 12, color: 'var(--muted)', alignSelf: 'center' }}>No tickers in this tier</span>
-                : tickers.map(t => (
+                : displayed.map(t => (
                   <div key={t} style={{
                     display: 'flex', alignItems: 'center', gap: 4,
                     background: tier.bg, border: `1px solid ${tier.border}`,

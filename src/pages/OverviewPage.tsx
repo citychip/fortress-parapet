@@ -5,6 +5,7 @@ import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { getBriefing, getIbkrStatus, getAlerts, getPositions, fmt$, fmtDelta, type BriefingData, type IbkrStatusData, type AlertData, type PositionData } from '../lib/api';
+import { useSortable, SortTh } from '../components/Sortable';
 
 export default function OverviewPage() {
   const [briefing, setBriefing]   = useState<BriefingData | null>(null);
@@ -176,85 +177,7 @@ export default function OverviewPage() {
           )}
 
           {/* Positions summary — group legs by ticker */}
-          {(() => {
-            // Group raw legs by ticker, pick worst alert_state and sum net_liq_pct
-            const grouped: Record<string, any> = {};
-            for (const p of positions) {
-              const t = p.ticker;
-              if (!grouped[t]) {
-                grouped[t] = { ...p, _legs: [p] };
-              } else {
-                grouped[t]._legs.push(p);
-                // accumulate net_liq_pct
-                if (p.net_liq_pct != null)
-                  grouped[t].net_liq_pct = (grouped[t].net_liq_pct ?? 0) + p.net_liq_pct;
-                // keep worst alert state
-                if (p.alert_state === 'act') grouped[t].alert_state = 'act';
-                else if (p.alert_state === 'watch' && grouped[t].alert_state !== 'act')
-                  grouped[t].alert_state = 'watch';
-                // keep highest absolute delta leg as representative
-                if (p.current_delta != null &&
-                    Math.abs(p.current_delta) > Math.abs(grouped[t].current_delta ?? 0))
-                  grouped[t].current_delta = p.current_delta;
-                // use shortest expiry
-                if (p.expiry && (!grouped[t].expiry || p.expiry < grouped[t].expiry))
-                  grouped[t].expiry = p.expiry;
-              }
-            }
-            const rows = Object.values(grouped);
-            return (
-            <Card title={`Positions (${rows.length})`}>
-            <div style={{ overflowX: 'auto' }}>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Ticker</th>
-                    <th>Legs</th>
-                    <th>Next Expiry</th>
-                    <th className="text-right">Delta</th>
-                    <th className="text-right">NLV%</th>
-                    <th>State</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((p: any, i: number) => {
-                    const deltaWarn = p.current_delta && Math.abs(p.current_delta) > 0.4;
-                    const daysToExp = p.expiry
-                      ? Math.ceil((new Date(p.expiry).getTime() - Date.now()) / 86400000)
-                      : null;
-                    return (
-                      <tr key={i}>
-                        <td style={{ fontWeight: 600 }}>{p.ticker}</td>
-                        <td style={{ color: 'var(--muted)' }}>{p._legs.length}</td>
-                        <td style={{ fontSize: 12, color: 'var(--muted)' }}>
-                          {p.expiry ?? '—'}
-                          {daysToExp != null && (
-                            <span style={{ color: daysToExp < 14 ? 'var(--yellow)' : 'var(--muted)', marginLeft: 6, fontSize: 11 }}>
-                              {daysToExp}d
-                            </span>
-                          )}
-                        </td>
-                        <td className={`text-right mono ${deltaWarn ? 'text-yellow' : ''}`}>
-                          {p.current_delta != null ? p.current_delta.toFixed(3) : '—'}
-                        </td>
-                        <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
-                        <td>
-                          <span style={{
-                            fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                            background: p.alert_state === 'safe' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.15)',
-                            color: p.alert_state === 'safe' ? 'var(--green)' : 'var(--yellow)',
-                            fontWeight: 600, textTransform: 'uppercase',
-                          }}>{p.alert_state ?? 'unknown'}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            </Card>
-            );
-          })()}
+          <OverviewPositions positions={positions} />
 
           {/* IBKR status */}
           <Card title="Infrastructure">
@@ -283,6 +206,75 @@ export default function OverviewPage() {
         </div>
       )}
     </Layout>
+  );
+}
+
+function OverviewPositions({ positions }: { positions: any[] }) {
+  // Group legs by ticker
+  const grouped: Record<string, any> = {};
+  for (const p of positions) {
+    const t = p.ticker ?? '?';
+    if (!grouped[t]) { grouped[t] = { ...p, _legs: [p] }; }
+    else {
+      grouped[t]._legs.push(p);
+      if (p.net_liq_pct != null) grouped[t].net_liq_pct = (grouped[t].net_liq_pct ?? 0) + p.net_liq_pct;
+      if (p.alert_state === 'act') grouped[t].alert_state = 'act';
+      else if (p.alert_state === 'watch' && grouped[t].alert_state !== 'act') grouped[t].alert_state = 'watch';
+      if (p.current_delta != null && Math.abs(p.current_delta) > Math.abs(grouped[t].current_delta ?? 0)) grouped[t].current_delta = p.current_delta;
+      if (p.expiry && (!grouped[t].expiry || p.expiry < grouped[t].expiry)) grouped[t].expiry = p.expiry;
+    }
+  }
+  const rawRows = Object.values(grouped).map((p: any) => ({
+    ...p,
+    _leg_count: p._legs.length,
+    _dte: p.expiry ? Math.ceil((new Date(p.expiry).getTime() - Date.now()) / 86400000) : null,
+  }));
+
+  const { sorted, key, dir, toggle } = useSortable(rawRows, 'net_liq_pct', 'desc');
+
+  return (
+    <Card title={`Positions (${rawRows.length})`}>
+      <div style={{ overflowX: 'auto' }}>
+        <table>
+          <thead><tr>
+            <SortTh label="Ticker"      sortKey="ticker"        activeKey={key} dir={dir} onToggle={toggle} />
+            <SortTh label="Legs"        sortKey="_leg_count"    activeKey={key} dir={dir} onToggle={toggle} />
+            <SortTh label="Next Expiry" sortKey="expiry"        activeKey={key} dir={dir} onToggle={toggle} />
+            <SortTh label="DTE"         sortKey="_dte"          activeKey={key} dir={dir} onToggle={toggle} align="right" />
+            <SortTh label="Delta"       sortKey="current_delta" activeKey={key} dir={dir} onToggle={toggle} align="right" />
+            <SortTh label="NLV%"        sortKey="net_liq_pct"   activeKey={key} dir={dir} onToggle={toggle} align="right" />
+            <SortTh label="State"       sortKey="alert_state"   activeKey={key} dir={dir} onToggle={toggle} />
+          </tr></thead>
+          <tbody>
+            {sorted.map((p: any, i: number) => {
+              const deltaWarn = p.current_delta && Math.abs(p.current_delta) > 0.4;
+              return (
+                <tr key={i}>
+                  <td style={{ fontWeight: 600 }}>{p.ticker}</td>
+                  <td style={{ color: 'var(--muted)' }}>{p._leg_count}</td>
+                  <td style={{ fontSize: 12, color: 'var(--muted)' }}>{p.expiry ?? '—'}</td>
+                  <td className="text-right" style={{ fontSize: 11, color: p._dte != null && p._dte < 14 ? 'var(--yellow)' : 'var(--muted)' }}>
+                    {p._dte != null ? `${p._dte}d` : '—'}
+                  </td>
+                  <td className={`text-right mono ${deltaWarn ? 'text-yellow' : ''}`}>
+                    {p.current_delta != null ? p.current_delta.toFixed(3) : '—'}
+                  </td>
+                  <td className="text-right">{p.net_liq_pct != null ? `${p.net_liq_pct.toFixed(1)}%` : '—'}</td>
+                  <td>
+                    <span style={{
+                      fontSize: 11, padding: '2px 8px', borderRadius: 4,
+                      background: p.alert_state === 'safe' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.15)',
+                      color: p.alert_state === 'safe' ? 'var(--green)' : 'var(--yellow)',
+                      fontWeight: 600, textTransform: 'uppercase',
+                    }}>{p.alert_state ?? 'unknown'}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 
