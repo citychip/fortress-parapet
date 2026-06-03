@@ -1,11 +1,12 @@
 import { useLocation } from 'wouter';
 
 const NAV = [
-  { path: '/',          label: 'Overview',  icon: '◈' },
-  { path: '/portfolio', label: 'Portfolio', icon: '▦' },
-  { path: '/market',    label: 'Market',    icon: '◎' },
-  { path: '/orders',    label: 'Orders',    icon: '⊡' },
-  { path: '/system',    label: 'System',    icon: '⚙' },
+  { path: '/',            label: 'Overview',   icon: '◈' },
+  { path: '/portfolio',   label: 'Portfolio',  icon: '▦' },
+  { path: '/candidates',  label: 'Candidates', icon: '⊕' },
+  { path: '/market',      label: 'Market',     icon: '◎' },
+  { path: '/orders',      label: 'Orders',     icon: '⊡' },
+  { path: '/system',      label: 'System',     icon: '⚙' },
 ];
 
 export default function Sidebar() {

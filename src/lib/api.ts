@@ -78,19 +78,32 @@ export interface BriefingData {
   account?: {
     net_liq?: number | null;
     available_funds?: number | null;
+    excess_liq?: number | null;
+    thresholds?: { available_funds_ok?: boolean; excess_liq_ok?: boolean };
   };
   macro_regime?: {
     regime?: string;
     vix?: number | null;
+    vix_state?: string | null;
   };
   pacing?: {
     used?: number;
     max_per_week?: number;
+    remaining?: number;
   };
   greeks?: {
     portfolio_delta?: number | null;
+    portfolio_theta?: number | null;
+    portfolio_vega?: number | null;
+    beta_weighted_delta?: number | null;
   };
-  actions?: Array<{ ticker?: string; id?: string; action?: string; type?: string }>;
+  concentration?: {
+    top?: Array<{ ticker: string; pct: number }>;
+    all?: Record<string, number>;
+    msft_warning?: boolean;
+  };
+  staleness?: { hours?: number; state?: string };
+  actions?: Array<{ ticker?: string; id?: string; action?: string; type?: string; urgency?: string; message?: string }>;
 }
 
 export interface IbkrStatusData {
@@ -192,6 +205,25 @@ export interface IvRankData {
 }
 export const getIvRank = (ticker: string) =>
   req<IvRankData>(`/api/qd/iv-rank/${encodeURIComponent(ticker)}`);
+
+export interface CandidateRow {
+  ticker: string;
+  price: number | null;
+  ivr: number | null;
+  current_iv: number | null;
+  hv20: number | null;
+  spread_pp: number | null;
+  days_to_earnings: number | null;
+  signal: string | null;
+  concentration_pct: number;
+  earnings_state: 'clear' | 'approaching' | 'blackout' | string;
+  concentration_state: 'low' | 'moderate' | 'high' | string;
+  excluded: boolean;
+  exclusion_reason: string | null;
+  can_trade: boolean;
+}
+export const getCandidates = () =>
+  req<{ as_of: string | null; rows: CandidateRow[] }>('/api/candidates');
 
 // ── Orders ───────────────────────────────────────────────────────────────────
 export const getPendingOrders  = () => req<{ orders?: OrderData[]; pending?: OrderData[] }>('/api/orders/pending');

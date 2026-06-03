@@ -51,9 +51,13 @@ export default function OverviewPage() {
   const pacing  = pacingObj ? `${pacingObj.used ?? 0}/${pacingObj.max_per_week ?? 5}` : '—';
 
   const totalDelta = briefing?.greeks?.portfolio_delta ?? positions.reduce((sum, p) => sum + (p.current_delta ?? 0), 0);
-  const ibkrOk  = ibkr?.web_api?.session_status?.authenticated;
+  const theta       = briefing?.greeks?.portfolio_theta;
+  const excessLiq   = briefing?.account?.excess_liq;
+  const ibkrOk      = ibkr?.web_api?.session_status?.authenticated;
+  const msftWarn    = briefing?.concentration?.msft_warning;
 
   const activeAlerts = alerts.filter(a => a.state !== 'ok' && a.state !== 'safe');
+  const activeActions = (briefing?.actions ?? []).filter(a => a.ticker || a.action || a.message);
 
   const nearExpiry = positions
     .map(p => ({ ...p, _dte: p.expiry ? Math.ceil((new Date(p.expiry).getTime() - Date.now()) / 86400000) : null }))
@@ -78,13 +82,54 @@ export default function OverviewPage() {
 
           {/* Top stat bar */}
           <StatRow stats={[
-            { label: 'Net Liq',   value: fmt$(nlv),   color: 'var(--text)' },
-            { label: 'Available', value: fmt$(avail),  color: 'var(--muted)' },
-            { label: 'Δ portfolio', value: totalDelta != null ? String(Math.round(totalDelta)) : '—', color: deltaColor, mono: true },
-            { label: 'VIX',       value: vix?.toFixed(2) ?? '—', color: vixColor },
-            { label: 'Regime',    value: String(regime).toUpperCase(), color: 'var(--muted)' },
-            { label: 'Pacing',    value: String(pacing) },
+            { label: 'Net Liq',     value: fmt$(nlv),    color: 'var(--text)' },
+            { label: 'Available',   value: fmt$(avail),  color: briefing?.account?.thresholds?.available_funds_ok === false ? 'var(--red)' : 'var(--muted)' },
+            { label: 'Excess Liq',  value: fmt$(excessLiq), color: briefing?.account?.thresholds?.excess_liq_ok === false ? 'var(--red)' : 'var(--muted)' },
+            { label: 'Δ port',      value: totalDelta != null ? (totalDelta > 0 ? '+' : '') + Math.round(totalDelta) : '—', color: deltaColor, mono: true },
+            { label: 'Θ/day',       value: theta != null ? `+$${Math.abs(theta).toFixed(0)}` : '—', color: 'var(--green)', mono: true },
+            { label: 'VIX',         value: vix?.toFixed(2) ?? '—', color: vixColor },
+            { label: 'Regime',      value: String(regime).toUpperCase(), color: 'var(--muted)' },
+            { label: 'Pacing',      value: String(pacing) },
           ]} />
+
+          {/* MSFT concentration lock warning */}
+          {msftWarn && (
+            <div style={{
+              padding: '10px 16px', borderRadius: 8,
+              background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.3)',
+              display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
+            }}>
+              <span style={{ color: 'var(--red)', fontWeight: 700 }}>🔒 MSFT concentration {briefing?.concentration?.all?.['MSFT']?.toFixed(0)}% of NLQ</span>
+              <span style={{ color: 'var(--muted)', fontSize: 12 }}>— new entries locked until below 30%</span>
+            </div>
+          )}
+
+          {/* Priority actions from briefing */}
+          {activeActions.length > 0 && (
+            <Card title={`Priority Actions (${activeActions.length})`}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {activeActions.map((a, i) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '8px 12px', borderRadius: 6,
+                    background: 'var(--surface2)',
+                    borderLeft: `3px solid ${a.urgency === 'critical' ? 'var(--red)' : 'var(--yellow)'}`,
+                  }}>
+                    {a.ticker && <span style={{ fontWeight: 700, fontSize: 13, minWidth: 60 }}>{a.ticker}</span>}
+                    <span style={{ flex: 1, fontSize: 13, color: 'var(--muted)' }}>
+                      {a.action ?? a.type ?? a.message ?? JSON.stringify(a)}
+                    </span>
+                    {a.urgency && (
+                      <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
+                        color: a.urgency === 'critical' ? 'var(--red)' : 'var(--yellow)' }}>
+                        {a.urgency}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
 
           {/* Near-expiry banner */}
           {nearExpiry.length > 0 && (
