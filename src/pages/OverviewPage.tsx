@@ -10,6 +10,7 @@ import { UniverseSection } from '../components/system/UniverseSection';
 import {
   getBriefing, getIbkrStatus, getAlerts, getPositions, getCandidates,
   getMarketIntel, getCalendar, fetchEarnings, getUniverse,
+  getSettings, getSpyHedge, getDpFloorsGex, getPcsExposure,
   fmt$,
   type BriefingData, type IbkrStatusData, type AlertData,
 } from '../lib/api';
@@ -23,12 +24,19 @@ export default function OverviewPage() {
   const [alerts,     setAlerts]     = useState<AlertData[]>([]);
   const [positions,  setPositions]  = useState<any[]>([]);   // augmented legs
   const [ivrMap,     setIvrMap]     = useState<Map<string, number | null>>(new Map());
+  const [ivMap,      setIvMap]      = useState<Map<string, number | null>>(new Map());
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState<string | null>(null);
   const [updatedAt,  setUpdatedAt]  = useState<string | null>(null);
 
+  // ── Settings (fetched once) ───────────────────────────────────────────────
+  const [settings,    setSettings]    = useState<any>(null);
+  const [pcsExposure, setPcsExposure] = useState<any>(null);
+
   // ── Market intel (lazy) ────────────────────────────────────────────────────
   const [intel,       setIntel]        = useState<any>(null);
+  const [hedge,       setHedge]        = useState<any>(null);
+  const [dpData,      setDpData]       = useState<any>(null);
   const [intelLoading, setIntelLoading] = useState(false);
   const [intelLoaded,  setIntelLoaded]  = useState(false);
 
@@ -49,18 +57,26 @@ export default function OverviewPage() {
     if (!background) setLoading(true);
     setError(null);
     try {
-      const [b, i, a, p, c] = await Promise.allSettled([
+      const [b, i, a, p, c, s, pcs] = await Promise.allSettled([
         getBriefing(), getIbkrStatus(), getAlerts(), getPositions(), getCandidates(),
+        getSettings(), getPcsExposure(),
       ]);
       if (b.status === 'fulfilled') setBriefing(b.value);
       if (i.status === 'fulfilled') setIbkr(i.value);
       if (a.status === 'fulfilled') setAlerts(a.value?.alerts ?? []);
       if (p.status === 'fulfilled') setPositions((p.value?.positions ?? []).map(augmentLeg));
       if (c.status === 'fulfilled') {
-        const m = new Map<string, number | null>();
-        for (const row of (c.value?.rows ?? [])) m.set(row.ticker, row.ivr ?? null);
+        const m  = new Map<string, number | null>();
+        const iv = new Map<string, number | null>();
+        for (const row of (c.value?.rows ?? [])) {
+          m.set(row.ticker,  row.ivr        ?? null);
+          iv.set(row.ticker, row.current_iv ?? null);
+        }
         setIvrMap(m);
+        setIvMap(iv);
       }
+      if (s.status   === 'fulfilled') setSettings(s.value);
+      if (pcs.status === 'fulfilled') setPcsExposure(pcs.value);
       if (b.status === 'rejected')  setError(String(b.reason));
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
@@ -73,8 +89,15 @@ export default function OverviewPage() {
   const loadMarket = useCallback(async () => {
     setIntelLoading(true);
     try {
-      const data = await getMarketIntel();
-      setIntel(data); setIntelLoaded(true);
+      const [intelRes, hedgeRes, dpRes] = await Promise.allSettled([
+        getMarketIntel(),
+        getSpyHedge(),
+        getDpFloorsGex('SPY'),
+      ]);
+      if (intelRes.status === 'fulfilled') setIntel(intelRes.value);
+      if (hedgeRes.status === 'fulfilled') setHedge(hedgeRes.value);
+      if (dpRes.status   === 'fulfilled') setDpData(dpRes.value);
+      setIntelLoaded(true);
     } catch (e: any) { setError(String(e)); }
     finally { setIntelLoading(false); }
   }, []);
@@ -194,6 +217,30 @@ export default function OverviewPage() {
             </div>
           )}
 
+          {pcsExposure && (pcsExposure.spread_count > 0 || pcsExposure.at_cap) && (() => {
+            const atCap   = pcsExposure.at_cap;
+            const color   = atCap ? 'var(--red)' : 'var(--yellow)';
+            const bg      = atCap ? 'rgba(239,68,68,0.07)' : 'rgba(245,158,11,0.07)';
+            const border  = atCap ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.25)';
+            return (
+              <div style={{ padding: '10px 16px', borderRadius: 8, background: bg, border: `1px solid ${border}`, display: 'flex', alignItems: 'center', gap: 14, fontSize: 13 }}>
+                <span style={{ color, fontWeight: 700 }}>PCS Exposure</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--fg)' }}>
+                  {pcsExposure.spread_count ?? 0}/{pcsExposure.max_spreads ?? '?'} spreads
+                </span>
+                {pcsExposure.total_notional_usd != null && (
+                  <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--muted)' }}>
+                    ${(pcsExposure.total_notional_usd / 1000).toFixed(0)}K notional
+                  </span>
+                )}
+                {pcsExposure.tickers?.length > 0 && (
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>{pcsExposure.tickers.join(' · ')}</span>
+                )}
+                {atCap && <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: 'var(--red)' }}>AT CAP</span>}
+              </div>
+            );
+          })()}
+
           {activeActions.length > 0 && (
             <Card title={`Priority Actions (${activeActions.length})`}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -231,7 +278,7 @@ export default function OverviewPage() {
               <Spinner size={32} />
             </div>
           )}
-          <PositionsTab positions={positions} ivrMap={ivrMap} />
+          <PositionsTab positions={positions} ivrMap={ivrMap} ivMap={ivMap} settings={settings} />
         </>
       )}
 
@@ -261,10 +308,49 @@ export default function OverviewPage() {
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 {intel.current_price && <KV label="SPY"          value={`$${intel.current_price}`} />}
                 {intel.dp_floor      && <KV label="DP Floor"      value={`$${intel.dp_floor}`} />}
+                {intel.dp_ceiling    && <KV label="DP Ceiling"    value={`$${intel.dp_ceiling}`} />}
                 {intel.gex_call_wall && <KV label="GEX Call Wall" value={`$${intel.gex_call_wall}`} />}
                 {intel.gex_put_wall  && <KV label="GEX Put Wall"  value={`$${intel.gex_put_wall}`} />}
                 {intel.flip_level    && <KV label="Flip Level"    value={`$${intel.flip_level}`} />}
               </div>
+              {/* ── DP Floors list ──────────────────────────────────────────── */}
+              {dpData?.dp_floors?.length > 0 && (
+                <Card title="DP Floors — SPY">
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {[...dpData.dp_floors].sort((a: number, b: number) => b - a).map((lvl: number, i: number) => (
+                      <span key={i} style={{
+                        fontFamily: 'monospace', fontSize: 12,
+                        padding: '3px 10px', borderRadius: 4,
+                        background: 'var(--surface2)', color: 'var(--fg)',
+                        border: '1px solid var(--border)',
+                      }}>${lvl.toFixed(2)}</span>
+                    ))}
+                  </div>
+                </Card>
+              )}
+              {/* ── SPY Hedge Coverage ──────────────────────────────────────── */}
+              {hedge && (
+                <Card title="SPY Hedge Coverage">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                    <span style={{
+                      fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 4,
+                      background: hedge.coverage_ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+                      color: hedge.coverage_ok ? 'var(--green)' : 'var(--red)',
+                    }}>{hedge.coverage_ok ? '✓ HEDGED' : '✕ UNDER-HEDGED'}</span>
+                    <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      Current: <span style={{ color: 'var(--fg)', fontFamily: 'monospace' }}>${(hedge.hedge_market_value ?? 0).toLocaleString()}</span>
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      Target: <span style={{ color: 'var(--fg)', fontFamily: 'monospace' }}>${(hedge.target_min ?? 0).toLocaleString()}–${(hedge.target_max ?? 0).toLocaleString()}</span>
+                    </span>
+                    {hedge.legs_count != null && (
+                      <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        Legs: <span style={{ fontFamily: 'monospace', color: 'var(--fg)' }}>{hedge.legs_count}</span>
+                      </span>
+                    )}
+                  </div>
+                </Card>
+              )}
               {Array.isArray(intel.regime?.signals) && intel.regime.signals.length > 0 && (
                 <Card title="Regime Signals">
                   {intel.regime.signals.map((s: any, i: number) => (
@@ -286,7 +372,7 @@ export default function OverviewPage() {
                 </Card>
               )}
               {(() => {
-                const skip = new Set(['as_of','ticker','session_date','current_price','regime','dp_floor','gex_call_wall','gex_put_wall','flip_level','gamma_regime']);
+                const skip = new Set(['as_of','ticker','session_date','current_price','regime','dp_floor','dp_ceiling','gex_call_wall','gex_put_wall','flip_level','gamma_regime']);
                 const rest = Object.entries(intel).filter(([k, v]) => !skip.has(k) && v != null && typeof v !== 'object');
                 if (!rest.length) return null;
                 return (
@@ -459,41 +545,68 @@ function StratRow({ badge, strike, expiry, legs, alert }: {
   const netMv    = netOf(legs, 'market_value');
   const netNlv   = netOf(legs, 'net_liq_pct');
   const { bg, color } = BADGE[badge] ?? BADGE.LEG;
-  const deltaWarn = Math.abs(netDelta) > 0.35;
+  const absDelta  = Math.abs(netDelta);
+  const deltaAct  = 0.42;
+  const deltaWatch = 0.35;
+  const rollDte   = 21;
+
+  // Compute specific alert messages — delta checked on SHORT legs only
+  const alerts: { msg: string; color: string }[] = [];
+  const shortLegs = legs.filter(l => (l.qty ?? 0) < 0 && l.sec_type !== 'STK');
+  const maxShortDelta = shortLegs.length > 0
+    ? Math.max(...shortLegs.map(l => Math.abs(l.current_delta ?? 0)))
+    : null;
+  if (maxShortDelta != null) {
+    if (maxShortDelta >= deltaAct)
+      alerts.push({ msg: `Δ ${maxShortDelta.toFixed(3)} ≥ ${deltaAct} — act`, color: 'var(--red)' });
+    else if (maxShortDelta >= deltaWatch)
+      alerts.push({ msg: `Δ ${maxShortDelta.toFixed(3)} ≥ ${deltaWatch} — watch`, color: 'var(--yellow)' });
+    if (d > 0 && d <= rollDte)
+      alerts.push({ msg: `${d}d to expiry — roll window`, color: d <= 7 ? 'var(--red)' : 'var(--yellow)' });
+  }
 
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '52px 1fr 120px 72px 64px 80px 52px',
-      alignItems: 'center', gap: 8, padding: '9px 16px',
-      borderTop: '1px solid var(--border)',
-      background: alert ? 'rgba(239,68,68,0.03)' : undefined,
-    }}>
-      <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: bg, color, textAlign: 'center', letterSpacing: '0.04em' }}>{badge}</span>
-      <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{strike}</span>
-      <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-        {expiry ?? '—'}
-        {expiry && <span style={{ color: dteColor, marginLeft: 5, fontWeight: d <= 14 ? 600 : 400 }}>{d}d</span>}
-      </span>
-      <span style={{ fontFamily: 'monospace', fontSize: 12, textAlign: 'right', color: deltaWarn ? 'var(--yellow)' : netDelta > 0 ? 'var(--green)' : netDelta < 0 ? 'var(--red)' : 'var(--muted)' }}>
-        {netDelta > 0 ? '+' : ''}{netDelta.toFixed(3)}
-      </span>
-      <span style={{ fontFamily: 'monospace', fontSize: 11, textAlign: 'right', color: netTheta >= 0 ? 'var(--green)' : 'var(--red)' }}>
-        {netTheta >= 0 ? '+' : ''}${Math.abs(netTheta).toFixed(0)}/d
-      </span>
-      <span style={{ fontFamily: 'monospace', fontSize: 12, textAlign: 'right', color: netMv >= 0 ? 'var(--green)' : 'var(--red)' }}>
-        {fmt$(netMv, 0)}
-      </span>
-      <span style={{ fontFamily: 'monospace', fontSize: 11, textAlign: 'right', color: 'var(--muted)' }}>
-        {netNlv > 0 ? '+' : ''}{netNlv.toFixed(1)}%
-      </span>
+    <div style={{ borderTop: '1px solid var(--border)', background: alert ? 'rgba(239,68,68,0.03)' : undefined }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '52px 1fr 120px 72px 64px 80px 52px',
+        alignItems: 'center', gap: 8, padding: '9px 16px',
+      }}>
+        <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: bg, color, textAlign: 'center', letterSpacing: '0.04em' }}>{badge}</span>
+        <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{strike}</span>
+        <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+          {expiry ?? '—'}
+          {expiry && <span style={{ color: dteColor, marginLeft: 5, fontWeight: d <= 14 ? 600 : 400 }}>{d}d</span>}
+        </span>
+        <span style={{ fontFamily: 'monospace', fontSize: 12, textAlign: 'right', color: (maxShortDelta ?? absDelta) >= deltaAct ? 'var(--red)' : (maxShortDelta ?? absDelta) >= deltaWatch ? 'var(--yellow)' : netDelta > 0 ? 'var(--green)' : netDelta < 0 ? 'var(--red)' : 'var(--muted)' }}>
+          {netDelta > 0 ? '+' : ''}{netDelta.toFixed(3)}
+        </span>
+        <span style={{ fontFamily: 'monospace', fontSize: 11, textAlign: 'right', color: netTheta >= 0 ? 'var(--green)' : 'var(--red)' }}>
+          {netTheta >= 0 ? '+' : ''}${Math.abs(netTheta).toFixed(0)}/d
+        </span>
+        <span style={{ fontFamily: 'monospace', fontSize: 12, textAlign: 'right', color: netMv >= 0 ? 'var(--green)' : 'var(--red)' }}>
+          {fmt$(netMv, 0)}
+        </span>
+        <span style={{ fontFamily: 'monospace', fontSize: 11, textAlign: 'right', color: 'var(--muted)' }}>
+          {netNlv > 0 ? '+' : ''}{netNlv.toFixed(1)}%
+        </span>
+      </div>
+      {alerts.length > 0 && (
+        <div style={{ padding: '0 16px 8px 80px', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {alerts.map((a, i) => (
+            <span key={i} style={{ fontSize: 11, color: a.color, fontFamily: 'monospace' }}>
+              ⚑ {a.msg}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Ticker section ────────────────────────────────────────────────────────────
 
-function TickerSection({ ticker, legs, ivr }: { ticker: string; legs: any[]; ivr?: number | null }) {
+function TickerSection({ ticker, legs, ivr, iv }: { ticker: string; legs: any[]; ivr?: number | null; iv?: number | null }) {
   const groups     = groupTickerLegs(legs);
   const netDelta   = netOf(legs, 'current_delta');
   const netNlv     = netOf(legs, 'net_liq_pct');
@@ -520,6 +633,11 @@ function TickerSection({ ticker, legs, ivr }: { ticker: string; legs: any[]; ivr
             color: nearestDte <= 7 ? 'var(--red)' : nearestDte <= 14 ? 'var(--yellow)' : 'var(--muted)',
             fontWeight: nearestDte <= 14 ? 600 : 400,
           }}>{nearestDte}d</span>
+        )}
+        {iv != null && (
+          <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>
+            IV {iv.toFixed(1)}%
+          </span>
         )}
         {ivr != null && (
           <span style={{
@@ -604,7 +722,7 @@ function TickerSection({ ticker, legs, ivr }: { ticker: string; legs: any[]; ivr
 
 // ── Positions tab ─────────────────────────────────────────────────────────────
 
-function PositionsTab({ positions, ivrMap }: { positions: any[]; ivrMap?: Map<string, number | null> }) {
+function PositionsTab({ positions, ivrMap, ivMap, settings }: { positions: any[]; ivrMap?: Map<string, number | null>; ivMap?: Map<string, number | null>; settings?: any }) {
   const byTicker = new Map<string, any[]>();
   for (const leg of positions) {
     const t = leg.ticker ?? '?';
@@ -647,8 +765,32 @@ function PositionsTab({ positions, ivrMap }: { positions: any[]; ivrMap?: Map<st
         </div>
       )}
       {tickerGroups.map(g => (
-        <TickerSection key={g.ticker} ticker={g.ticker} legs={g.legs} ivr={ivrMap?.get(g.ticker)} />
+        <TickerSection key={g.ticker} ticker={g.ticker} legs={g.legs} ivr={ivrMap?.get(g.ticker)} iv={ivMap?.get(g.ticker)} />
       ))}
+      {settings?.config && (() => {
+        const a = settings.config.alerts ?? {};
+        const s = settings.config.strategy ?? {};
+        const items = [
+          a.delta_watch_threshold != null && `Δ watch ≥ ${a.delta_watch_threshold}`,
+          a.delta_act_threshold   != null && `Δ act ≥ ${a.delta_act_threshold}`,
+          s.max_concentration_pct != null && `Max name ${s.max_concentration_pct}% NL`,
+          s.sector_concentration_max_pct != null && `Max sector ${s.sector_concentration_max_pct}%`,
+          s.ivr_min_entry         != null && `IVR min ${s.ivr_min_entry}`,
+          s.dte_roll_threshold    != null && `Roll ≤ ${s.dte_roll_threshold}d`,
+        ].filter(Boolean);
+        if (!items.length) return null;
+        return (
+          <div style={{
+            marginTop: 12, padding: '8px 14px', borderRadius: 6,
+            background: 'var(--surface2)', borderTop: '1px solid var(--border)',
+            fontSize: 11, color: 'var(--muted)', display: 'flex', gap: 16, flexWrap: 'wrap',
+          }}>
+            {items.map((item, i) => (
+              <span key={i} style={{ fontFamily: 'monospace' }}>{item as string}</span>
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 }

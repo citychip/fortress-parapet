@@ -6,6 +6,43 @@ import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { getCandidates, type CandidateRow } from '../lib/api';
 
+// ── Signal tier ───────────────────────────────────────────────────────────────
+
+type SignalTier = 'strong' | 'sell' | 'watch' | 'neutral';
+
+function getSignalTier(raw: string | null | undefined): SignalTier {
+  if (!raw) return 'neutral';
+  const s = raw.toUpperCase().replace(/\s+/g, '_');
+  if (s.includes('STRONG')) return 'strong';
+  if (s.includes('BULL') || s === 'SELL' || s.includes('PREMIUM')) return 'sell';
+  if (s.includes('WATCH')) return 'watch';
+  return 'neutral';
+}
+
+function signalStyle(tier: SignalTier): { color: string; bg: string; border: string } {
+  switch (tier) {
+    case 'strong':  return { color: 'var(--red)',    bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.3)' };
+    case 'sell':    return { color: 'var(--yellow)', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.3)' };
+    case 'watch':   return { color: 'var(--blue, #38bdf8)', bg: 'rgba(56,189,248,0.10)', border: 'rgba(56,189,248,0.3)' };
+    default:        return { color: 'var(--muted)',  bg: 'rgba(100,116,139,0.08)', border: 'rgba(100,116,139,0.2)' };
+  }
+}
+
+function SignalBadge({ raw }: { raw: string | null | undefined }) {
+  if (!raw || raw === '-') return <span style={{ color: 'var(--muted)', fontSize: 12 }}>—</span>;
+  const tier = getSignalTier(raw);
+  const { color, bg, border } = signalStyle(tier);
+  const label = raw.replace(/_/g, ' ');
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+      color, background: bg, border: `1px solid ${border}`,
+      fontFamily: 'monospace',
+      ...(tier === 'strong' ? { animation: 'pulse 2s infinite' } : {}),
+    }}>{label}</span>
+  );
+}
+
 // ── Gate badge ────────────────────────────────────────────────────────────────
 
 function GateBadge({ row }: { row: CandidateRow }) {
@@ -63,7 +100,7 @@ export default function CandidatesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [filter, setFilter]   = useState<'all' | 'ready' | 'blocked'>('all');
+  const [filter, setFilter]   = useState<'all' | 'ready' | 'blocked' | 'actionable' | 'watch'>('all');
 
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
@@ -85,9 +122,15 @@ export default function CandidatesPage() {
     return () => clearInterval(id);
   }, [load]);
 
-  const ready   = rows.filter(r => r.can_trade);
-  const blocked = rows.filter(r => !r.can_trade);
-  const visible = filter === 'ready' ? ready : filter === 'blocked' ? blocked : rows;
+  const ready      = rows.filter(r => r.can_trade);
+  const blocked    = rows.filter(r => !r.can_trade);
+  const actionable = rows.filter(r => r.can_trade && ['strong','sell'].includes(getSignalTier(r.signal)));
+  const watchList  = rows.filter(r => getSignalTier(r.signal) === 'watch');
+  const visible    = filter === 'ready'      ? ready
+                   : filter === 'blocked'    ? blocked
+                   : filter === 'actionable' ? actionable
+                   : filter === 'watch'      ? watchList
+                   : rows;
 
   const { sorted: tableSorted, key: sortKey, dir: sortDir, toggle } = useSortable(visible, 'ivr', 'desc');
   // When no column sort active, keep ready-first default
@@ -110,43 +153,40 @@ export default function CandidatesPage() {
 
       {/* Summary bar */}
       {rows.length > 0 && (
-        <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Signal stat cards */}
+          {([
+            { key: 'actionable', label: 'Actionable', count: actionable.length, color: 'var(--yellow)', bg: 'rgba(245,158,11,0.07)', border: 'rgba(245,158,11,0.25)' },
+            { key: 'watch',      label: 'Watch',      count: watchList.length,  color: '#38bdf8',       bg: 'rgba(56,189,248,0.07)', border: 'rgba(56,189,248,0.25)' },
+            { key: 'ready',      label: 'Ready',      count: ready.length,      color: 'var(--green)',  bg: 'rgba(34,197,94,0.06)',  border: 'rgba(34,197,94,0.2)' },
+            { key: 'blocked',    label: 'Blocked',    count: blocked.length,    color: 'var(--muted)',  bg: 'var(--surface)',        border: 'var(--border)' },
+          ] as const).map(({ key, label, count, color, bg, border }) => (
+            <button key={key} onClick={() => setFilter(key as any)} style={{
+              background: filter === key ? bg : 'var(--surface)',
+              border: `1px solid ${filter === key ? border : 'var(--border)'}`,
+              borderRadius: 10, padding: '10px 18px', cursor: 'pointer', textAlign: 'left',
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 3 }}>{label}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: filter === key ? color : 'var(--fg)' }}>{count}</div>
+            </button>
+          ))}
           <div style={{
             background: 'var(--surface)', border: '1px solid var(--border)',
-            borderRadius: 10, padding: '12px 20px',
+            borderRadius: 10, padding: '10px 18px', flex: 1, minWidth: 160,
           }}>
-            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 4 }}>Ready</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--green)' }}>{ready.length}</div>
-          </div>
-          <div style={{
-            background: 'var(--surface)', border: '1px solid var(--border)',
-            borderRadius: 10, padding: '12px 20px',
-          }}>
-            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 4 }}>Blocked</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--red)' }}>{blocked.length}</div>
-          </div>
-          <div style={{
-            background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)',
-            borderRadius: 10, padding: '12px 20px', flex: 1, minWidth: 200,
-          }}>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>IVR ≥ 25 required · ≥ 50 prime</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 3 }}>IVR ≥ 25 required · ≥ 50 prime</div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              Top: {ready.slice(0, 3).map(r => `${r.ticker} (${r.ivr?.toFixed(0)})`).join(' · ')}
+              Top: {actionable.slice(0, 3).map(r => `${r.ticker} ${r.ivr?.toFixed(0)}`).join(' · ') || ready.slice(0, 3).map(r => `${r.ticker} ${r.ivr?.toFixed(0)}`).join(' · ') || '—'}
             </div>
           </div>
-
-          {/* Filter buttons */}
-          <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-            {(['all', 'ready', 'blocked'] as const).map(f => (
-              <button key={f} onClick={() => setFilter(f)} style={{
-                fontSize: 12, padding: '5px 14px', borderRadius: 6,
-                background: filter === f ? 'var(--accent)' : 'var(--surface2)',
-                color: filter === f ? '#fff' : 'var(--muted)',
-                border: filter === f ? 'none' : '1px solid var(--border2)',
-                fontWeight: filter === f ? 600 : 400,
-              }}>{f.charAt(0).toUpperCase() + f.slice(1)}</button>
-            ))}
-          </div>
+          {/* All button */}
+          <button onClick={() => setFilter('all')} style={{
+            fontSize: 12, padding: '8px 16px', borderRadius: 8, cursor: 'pointer',
+            background: filter === 'all' ? 'var(--accent)' : 'var(--surface2)',
+            color: filter === 'all' ? '#fff' : 'var(--muted)',
+            border: filter === 'all' ? 'none' : '1px solid var(--border2)',
+            fontWeight: filter === 'all' ? 600 : 400, alignSelf: 'center',
+          }}>All</button>
         </div>
       )}
 
@@ -174,8 +214,11 @@ export default function CandidatesPage() {
                   const spreadColor = (row.spread_pp ?? 0) >= 8 ? 'var(--green)'
                     : (row.spread_pp ?? 0) >= 4 ? 'var(--yellow)'
                     : (row.spread_pp ?? 0) < 0 ? 'var(--red)' : 'var(--muted)';
+                  const tier = getSignalTier(row.signal);
+                  const rowHighlight = tier === 'strong' ? 'rgba(239,68,68,0.04)'
+                    : tier === 'sell' ? 'rgba(245,158,11,0.03)' : rowBg;
                   return (
-                    <tr key={i} style={{ background: rowBg, opacity: row.can_trade ? 1 : 0.6 }}>
+                    <tr key={i} style={{ background: rowHighlight, opacity: row.can_trade ? 1 : 0.55 }}>
                       <td style={{ fontWeight: 700, fontSize: 14 }}>{row.ticker}</td>
                       <td className="text-right mono" style={{ fontSize: 12 }}>
                         {row.price != null ? `$${row.price.toFixed(2)}` : '—'}
@@ -197,9 +240,7 @@ export default function CandidatesPage() {
                         {row.concentration_pct !== 0 ? `${row.concentration_pct > 0 ? '+' : ''}${row.concentration_pct.toFixed(1)}%` : '—'}
                       </td>
                       <td><GateBadge row={row} /></td>
-                      <td style={{ fontSize: 12, color: signalWarn ? 'var(--yellow)' : 'var(--muted)' }}>
-                        {signalWarn ? row.signal : '—'}
-                      </td>
+                      <td><SignalBadge raw={row.signal} /></td>
                     </tr>
                   );
                 })}
