@@ -270,8 +270,8 @@ export const deleteAlert       = (id: string) =>
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 export const getSettings       = () => req<any>('/api/settings');
-export const getSpyHedge       = () => req<any>('/api/spy-hedge-coverage');
-export const getDpFloorsGex    = (ticker: string) => req<any>(`/api/dp-floors-and-gex/${encodeURIComponent(ticker)}`);
+export const getSpyHedge       = () => req<any>('/api/manage/spy_hedge_coverage');
+export const getDpFloorsGex    = (ticker: string) => req<any>(`/api/chart/${encodeURIComponent(ticker)}/levels`);
 export const getPcsExposure    = () => req<any>('/api/portfolio/pcs-exposure');
 export const updateSettings    = (section: string, data: any) =>
   req<any>(`/api/settings/${section}`, { method: 'PATCH', body: JSON.stringify(data) });
