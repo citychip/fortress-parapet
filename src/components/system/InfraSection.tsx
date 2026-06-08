@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Card from '../Card';
-import type { IbkrStatusData } from '../../lib/api';
+import { ibkrReconnect, getIbkrStatus, type IbkrStatusData } from '../../lib/api';
 
 interface Props {
   ibkr: IbkrStatusData | null;
@@ -21,8 +21,70 @@ function StatusDot({ ok, pulse }: { ok: boolean | undefined; pulse?: boolean }) 
   );
 }
 
+type ReconnectState = 'idle' | 'restarting' | 'waiting' | 'success' | 'failed';
+
 export function InfraSection({ ibkr, syncing, onSync }: Props) {
-  const [oauthExpanded, setOauthExpanded] = useState(false);
+  const [oauthExpanded, setOauthExpanded]   = useState(false);
+  const [reconnectState, setReconnectState] = useState<ReconnectState>('idle');
+  const [reconnectMsg, setReconnectMsg]     = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Stop polling on unmount
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  const handleReconnect = async () => {
+    if (reconnectState !== 'idle' && reconnectState !== 'failed' && reconnectState !== 'success') return;
+    setReconnectState('restarting');
+    setReconnectMsg('Restarting iBeam…');
+    try {
+      await ibkrReconnect();
+    } catch {
+      // Backend may return before iBeam is up — that's ok, we poll regardless
+    }
+    setReconnectState('waiting');
+    setReconnectMsg('Waiting for authentication…');
+    let elapsed = 0;
+    const POLL_INTERVAL = 3000;
+    const TIMEOUT = 60000;
+    pollRef.current = setInterval(async () => {
+      elapsed += POLL_INTERVAL;
+      try {
+        const status = await getIbkrStatus();
+        if (status?.web_api?.session_status?.authenticated) {
+          clearInterval(pollRef.current!);
+          setReconnectState('success');
+          setReconnectMsg('Connected ✓');
+          setTimeout(() => { setReconnectState('idle'); setReconnectMsg(''); onSync(); }, 2000);
+          return;
+        }
+      } catch { /* keep polling */ }
+      if (elapsed >= TIMEOUT) {
+        clearInterval(pollRef.current!);
+        setReconnectState('failed');
+        setReconnectMsg('Timed out — check iBeam logs');
+      } else {
+        setReconnectMsg(`Waiting for authentication… ${elapsed / 1000}s`);
+      }
+    }, POLL_INTERVAL);
+  };
+
+  const reconnectLabel = {
+    idle: '⟳ Reconnect',
+    restarting: 'Restarting…',
+    waiting: reconnectMsg,
+    success: '✓ Connected',
+    failed: '✗ Retry',
+  }[reconnectState];
+
+  const reconnectColor = {
+    idle: 'var(--yellow)',
+    restarting: 'var(--muted)',
+    waiting: 'var(--muted)',
+    success: 'var(--green)',
+    failed: 'var(--red)',
+  }[reconnectState];
+
+  const isReconnecting = reconnectState === 'restarting' || reconnectState === 'waiting';
 
   const wa = ibkr?.web_api;
   const authenticated = wa?.session_status?.authenticated;
@@ -50,6 +112,16 @@ export function InfraSection({ ibkr, syncing, onSync }: Props) {
             border: `1px solid ${isOauth ? 'rgba(99,102,241,0.25)' : 'rgba(59,130,246,0.25)'}`,
           }}>{isOauth ? 'OAuth 1.0a' : 'iBeam'}</span>
           <span style={{ flex: 1 }} />
+          {!authenticated && (
+            <button onClick={handleReconnect} disabled={isReconnecting} style={{
+              background: 'none', color: reconnectColor,
+              border: `1px solid ${reconnectColor}`,
+              padding: '5px 14px', fontWeight: 600, fontSize: 12,
+              minWidth: 140, textAlign: 'center',
+            }}>
+              {reconnectLabel}
+            </button>
+          )}
           <button onClick={onSync} disabled={syncing} style={{
             background: 'var(--accent)', color: '#fff', padding: '5px 16px', fontWeight: 600, fontSize: 12,
           }}>

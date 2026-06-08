@@ -295,6 +295,7 @@ export const runScript         = (key: string) =>
 // ── Infrastructure ───────────────────────────────────────────────────────────
 export const triggerIbkrSync   = () => req<any>('/api/ibkr/sync', { method: 'POST' });
 export const retryIbkrSync     = () => req<any>('/api/ibkr/upload/retry', { method: 'POST' });
+export const ibkrReconnect     = () => req<{ ok: boolean; message?: string }>('/api/ibkr/reconnect', { method: 'POST' });
 export const testQuantData     = () => req<{ ok: boolean; message?: string; iv_rank?: number | null; error?: string }>('/api/settings/test_quantdata', { method: 'POST' });
 export const getApiHealth      = () => req<{ status: string; version?: string }>('/api/health');
 
