@@ -7,7 +7,8 @@ import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import {
   getPositions, getSectorExposure, getPortfolioBeta,
-  getForwardPnl, fmt$, clsN,
+  getForwardPnl, getPnlHistory, getRollAll, getStopLossAll,
+  fmt$, clsN,
   type PositionData, type ForwardPnlData,
 } from '../lib/api';
 
@@ -50,6 +51,7 @@ export default function PortfolioPage() {
 
   const TABS = [
     { key: 'pnl',        label: 'P&L' },
+    { key: 'triage',     label: 'Triage' },
     { key: 'exposure',   label: 'Exposure' },
     { key: 'forwardpnl', label: 'Forward P&L' },
     { key: 'legs',       label: 'Legs' },
@@ -68,6 +70,9 @@ export default function PortfolioPage() {
 
       {/* P&L TAB */}
       {tab === 'pnl' && <PnlTab legs={posLegs} />}
+
+      {/* TRIAGE TAB */}
+      {tab === 'triage' && <TriageTab />}
 
       {/* LEGS TAB */}
       {tab === 'legs' && <LegsTab legs={posLegs} />}
@@ -218,6 +223,13 @@ function LegsTab({ legs }: { legs: any[] }) {
 }
 
 function PnlTab({ legs }: { legs: any[] }) {
+  const [history, setHistory] = useState<any[]>([]);
+  useEffect(() => {
+    getPnlHistory()
+      .then(d => setHistory(d?.rows ?? []))
+      .catch(() => {});
+  }, []);
+
   // Compute per-leg and aggregate by ticker
   const byTicker = new Map<string, { pnl: number; costBasis: number; legs: number }>();
   let totalPnl = 0;
@@ -307,6 +319,272 @@ function PnlTab({ legs }: { legs: any[] }) {
           })}
         </div>
       </Card>
+
+      {/* P&L History */}
+      <Card title="Realised P&L History">
+        {history.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13, padding: '12px 0' }}>
+            No history yet — realised P&L will appear here after closing trades.
+          </p>
+        ) : (
+          <PnlHistoryChart rows={history} />
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ── P&L History Chart ─────────────────────────────────────────────────────────
+
+function PnlHistoryChart({ rows }: { rows: any[] }) {
+  // Expect rows: [{date, realized_pnl, cumulative_pnl, ...}]
+  const sorted = [...rows].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+  if (!sorted.length) return null;
+
+  // Build cumulative if not present
+  let cum = 0;
+  const pts = sorted.map(r => {
+    const daily = r.realized_pnl ?? r.daily_pnl ?? 0;
+    cum += daily;
+    return { date: r.date ?? '', pnl: r.cumulative_pnl ?? cum, daily };
+  });
+
+  const W = 600, H = 180;
+  const M = { top: 16, right: 16, bottom: 32, left: 64 };
+  const iW = W - M.left - M.right;
+  const iH = H - M.top - M.bottom;
+
+  const values = pts.map(p => p.pnl);
+  const pad = Math.max(Math.abs(Math.min(...values)), Math.abs(Math.max(...values))) * 0.1 + 1;
+  const yLo = Math.min(Math.min(...values) - pad, 0);
+  const yHi = Math.max(Math.max(...values) + pad, 0);
+
+  const toX = (i: number) => M.left + (i / (pts.length - 1 || 1)) * iW;
+  const toY = (v: number) => M.top + (1 - (v - yLo) / (yHi - yLo)) * iH;
+  const yZero = toY(0);
+
+  const line = pts.map((p, i) => `${toX(i).toFixed(1)},${toY(p.pnl).toFixed(1)}`).join(' ');
+  const area = [
+    `${toX(0).toFixed(1)},${yZero.toFixed(1)}`,
+    ...pts.map((p, i) => `${toX(i).toFixed(1)},${toY(p.pnl).toFixed(1)}`),
+    `${toX(pts.length - 1).toFixed(1)},${yZero.toFixed(1)}`,
+  ].join(' ');
+
+  const fmtK = (v: number) => {
+    if (v === 0) return '$0';
+    const sign = v >= 0 ? '+' : '-';
+    const abs = Math.abs(v);
+    return abs < 1000 ? `${sign}$${abs.toFixed(0)}` : `${sign}$${(abs / 1000).toFixed(1)}K`;
+  };
+
+  // X-axis: show ~5 evenly spaced dates
+  const step = Math.max(1, Math.floor(pts.length / 5));
+  const xTicks = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+
+  const finalPnl = pts[pts.length - 1].pnl;
+  const isPos = finalPnl >= 0;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 200, display: 'block' }}>
+      <defs>
+        <clipPath id="hist-above"><rect x={M.left} y={M.top} width={iW} height={Math.max(0, yZero - M.top)} /></clipPath>
+        <clipPath id="hist-below"><rect x={M.left} y={yZero} width={iW} height={Math.max(0, H - M.bottom - yZero)} /></clipPath>
+      </defs>
+      <rect x={M.left} y={M.top} width={iW} height={iH} fill="rgba(0,0,0,0.12)" rx={3} />
+      <line x1={M.left} x2={M.left + iW} y1={yZero} y2={yZero} stroke="rgba(100,116,139,0.6)" strokeWidth={1.5} strokeDasharray="4 3" />
+      <polygon points={area} fill="rgba(34,197,94,0.12)" clipPath="url(#hist-above)" />
+      <polygon points={area} fill="rgba(239,68,68,0.10)" clipPath="url(#hist-below)" />
+      <polyline points={line} fill="none" stroke="rgba(34,197,94,0.9)" strokeWidth={2} clipPath="url(#hist-above)" />
+      <polyline points={line} fill="none" stroke="rgba(239,68,68,0.9)" strokeWidth={2} clipPath="url(#hist-below)" />
+      {/* Y labels */}
+      {[0, 0.5, 1].map(t => {
+        const v = yLo + t * (yHi - yLo);
+        return (
+          <text key={t} x={M.left - 6} y={toY(v) + 4} textAnchor="end" fill="var(--muted)" fontSize={9}>{fmtK(v)}</text>
+        );
+      })}
+      {/* X labels */}
+      {xTicks.map((p, i) => (
+        <text key={i} x={toX(pts.indexOf(p))} y={H - M.bottom + 12} textAnchor="middle" fill="var(--muted)" fontSize={8}>
+          {p.date.slice(5)} {/* MM-DD */}
+        </text>
+      ))}
+      {/* Final value label */}
+      <text x={M.left + iW - 4} y={toY(finalPnl) - 5} textAnchor="end"
+        fill={isPos ? 'var(--green)' : 'var(--red)'} fontSize={10} fontWeight="700">
+        {fmtK(finalPnl)}
+      </text>
+    </svg>
+  );
+}
+
+// ── Triage Tab ────────────────────────────────────────────────────────────────
+
+function TriageTab() {
+  const [rollData, setRollData]         = useState<any>(null);
+  const [stopData, setStopData]         = useState<any>(null);
+  const [loading, setLoading]           = useState(false);
+  const [err, setErr]                   = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    const [r, s] = await Promise.allSettled([getRollAll(), getStopLossAll()]);
+    if (r.status === 'fulfilled') setRollData(r.value);
+    if (s.status === 'fulfilled') setStopData(s.value);
+    if (r.status === 'rejected' && s.status === 'rejected') setErr(String(r.reason));
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const URGENCY_COLOR: Record<string, string> = {
+    urgent: 'var(--red)', warning: 'var(--yellow)', approaching: 'var(--accent)', none: 'var(--muted)',
+  };
+  const VERDICT_COLOR: Record<string, string> = {
+    ACT: 'var(--red)', WATCH: 'var(--yellow)', SAFE: 'var(--green)',
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {loading && (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><Spinner size={28} /></div>
+      )}
+      {err && <ErrorBanner msg={err} onRetry={load} />}
+
+      {/* Roll summary chips */}
+      {rollData && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {[
+            { label: 'Urgent',     count: rollData.summary?.urgent     ?? 0, color: 'var(--red)'    },
+            { label: 'Warning',    count: rollData.summary?.warning    ?? 0, color: 'var(--yellow)' },
+            { label: 'Approaching',count: rollData.summary?.approaching ?? 0, color: 'var(--accent)' },
+            { label: 'None',       count: rollData.summary?.none       ?? 0, color: 'var(--muted)'  },
+          ].map((s, i) => (
+            <div key={i} style={{
+              background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 10, padding: '12px 18px',
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 4 }}>{s.label}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: s.count > 0 && s.label !== 'None' ? s.color : 'var(--fg)' }}>{s.count}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Roll table */}
+      {rollData?.positions?.length > 0 && (
+        <Card title="Roll Check">
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead><tr>
+                <th>Ticker</th>
+                <th>Strategy</th>
+                <th>Expiry</th>
+                <th className="text-right">Strike</th>
+                <th className="text-right">Delta</th>
+                <th className="text-right">DTE</th>
+                <th>Urgency</th>
+                <th>Reasons</th>
+              </tr></thead>
+              <tbody>
+                {rollData.positions.map((p: any, i: number) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 700 }}>{p.ticker}</td>
+                    <td style={{ fontSize: 12, color: 'var(--muted)' }}>{p.strategy ?? '—'}</td>
+                    <td style={{ fontSize: 12, color: 'var(--muted)' }}>{p.expiry ?? '—'}</td>
+                    <td className="text-right mono" style={{ fontSize: 12 }}>{p.short_strike ?? '—'}</td>
+                    <td className="text-right mono" style={{ fontSize: 12, color: Math.abs(p.current_delta ?? 0) > 0.5 ? 'var(--red)' : 'var(--muted)' }}>
+                      {p.current_delta?.toFixed(3) ?? '—'}
+                    </td>
+                    <td className="text-right mono" style={{ fontSize: 12, color: (p.current_dte ?? 99) <= 14 ? 'var(--red)' : (p.current_dte ?? 99) <= 21 ? 'var(--yellow)' : 'var(--muted)' }}>
+                      {p.current_dte != null ? `${p.current_dte}d` : '—'}
+                    </td>
+                    <td>
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase',
+                        color: URGENCY_COLOR[p.urgency] ?? 'var(--muted)',
+                        background: p.urgency === 'urgent' ? 'rgba(239,68,68,0.1)' : p.urgency === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(100,116,139,0.1)',
+                      }}>{p.urgency ?? '—'}</span>
+                    </td>
+                    <td style={{ fontSize: 12, color: 'var(--muted)' }}>{(p.reasons ?? []).join(', ') || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* Stop-loss summary chips */}
+      {stopData && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+          {[
+            { label: 'ACT',   count: (stopData.summary?.act_immediately ?? 0) + (stopData.summary?.act ?? 0), color: 'var(--red)'    },
+            { label: 'WATCH', count: stopData.summary?.watch ?? 0, color: 'var(--yellow)' },
+            { label: 'SAFE',  count: stopData.summary?.safe  ?? 0, color: 'var(--green)'  },
+          ].map((s, i) => (
+            <div key={i} style={{
+              background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 10, padding: '12px 18px',
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 4 }}>Stop {s.label}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: s.count > 0 && s.label !== 'SAFE' ? s.color : 'var(--fg)' }}>{s.count}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Stop-loss table */}
+      {stopData?.positions?.length > 0 && (
+        <Card title="Stop-Loss Check">
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead><tr>
+                <th>Ticker</th>
+                <th className="text-right">Price</th>
+                <th className="text-right">SMA 200</th>
+                <th>Verdict</th>
+                <th>Action</th>
+                <th>Signals</th>
+              </tr></thead>
+              <tbody>
+                {stopData.positions
+                  .sort((a: any, b: any) => {
+                    const order: Record<string, number> = { ACT: 0, WATCH: 1, SAFE: 2 };
+                    return (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9);
+                  })
+                  .map((p: any, i: number) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 700 }}>{p.ticker}</td>
+                    <td className="text-right mono" style={{ fontSize: 12 }}>
+                      {p.latest_price != null ? `$${p.latest_price.toFixed(2)}` : '—'}
+                    </td>
+                    <td className="text-right mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      {p.sma_200 != null ? `$${p.sma_200.toFixed(2)}` : '—'}
+                    </td>
+                    <td>
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase',
+                        color: VERDICT_COLOR[p.verdict] ?? 'var(--muted)',
+                        background: p.verdict === 'ACT' ? 'rgba(239,68,68,0.12)' : p.verdict === 'WATCH' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)',
+                      }}>{p.verdict ?? '—'}</span>
+                    </td>
+                    <td style={{ fontSize: 12, color: p.verdict === 'ACT' ? 'var(--red)' : 'var(--muted)' }}>
+                      {p.recommended_action ?? '—'}
+                    </td>
+                    <td style={{ fontSize: 12, color: 'var(--muted)' }}>{(p.signals ?? []).join(', ') || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {!loading && !err && !rollData && !stopData && (
+        <p style={{ color: 'var(--muted)', textAlign: 'center', padding: 60 }}>No triage data.</p>
+      )}
     </div>
   );
 }

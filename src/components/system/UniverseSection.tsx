@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Card from '../Card';
 import { addTicker, removeTicker, excludeTicker, unexcludeTicker } from '../../lib/api';
+import { useToast } from '../Toast';
 
 // ── Tier metadata ─────────────────────────────────────────────────────────────
 
@@ -38,10 +39,11 @@ export function UniverseSection({ universe, onRefresh }: Props) {
   const [excludeReason, setExcludeReason] = useState('manual');
   const [excludeNote, setExcludeNote]    = useState('');
   const [sortAsc, setSortAsc]         = useState<Record<string, boolean>>({});
+  const { showToast } = useToast();
 
   const busy = (key: string) => { setActing(key); setErr(null); };
-  const done = () => { setActing(null); onRefresh(); };
-  const fail = (e: any) => { setActing(null); setErr(String(e?.message ?? e)); };
+  const done = (msg?: string) => { setActing(null); if (msg) showToast(msg); onRefresh(); };
+  const fail = (e: any) => { setActing(null); const msg = String(e?.message ?? e); setErr(msg); showToast(msg, 'error'); };
 
   const handleAdd = async () => {
     const t = newTicker.trim().toUpperCase();
@@ -63,7 +65,7 @@ export function UniverseSection({ universe, onRefresh }: Props) {
     }
 
     busy(`add-${t}`);
-    try { await addTicker(t, newTier); setNewTicker(''); done(); }
+    try { await addTicker(t, newTier); setNewTicker(''); done(`${t} added to ${newTier}`); }
     catch (e: any) {
       // Extract readable message from backend 409/422 errors
       const msg = e?.message ?? String(e);
@@ -75,7 +77,7 @@ export function UniverseSection({ universe, onRefresh }: Props) {
   const handleRemove = async (tier: string, ticker: string) => {
     if (!confirm(`Remove ${ticker} from ${tier}?`)) return;
     busy(`rm-${ticker}`);
-    try { await removeTicker(tier, ticker); done(); }
+    try { await removeTicker(tier, ticker); done(`${ticker} removed from ${tier}`); }
     catch (e) { fail(e); }
   };
 
@@ -84,13 +86,13 @@ export function UniverseSection({ universe, onRefresh }: Props) {
     try {
       await excludeTicker(ticker, excludeReason, excludeNote);
       setExcludeTarget(null); setExcludeReason('manual'); setExcludeNote('');
-      done();
+      done(`${ticker} excluded`);
     } catch (e) { fail(e); }
   };
 
   const handleUnexclude = async (ticker: string) => {
     busy(`unexcl-${ticker}`);
-    try { await unexcludeTicker(ticker); done(); }
+    try { await unexcludeTicker(ticker); done(`${ticker} restored from excluded`); }
     catch (e) { fail(e); }
   };
 

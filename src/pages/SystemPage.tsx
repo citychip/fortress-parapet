@@ -11,8 +11,11 @@ import { ScriptsSection } from '../components/system/ScriptsSection';
 import {
   getSettings, updateSettings,
   listScripts, runScript, getIbkrStatus, triggerIbkrSync,
-  type IbkrStatusData,
+  getJournal, addJournalEntry,
+  getAlerts, addAlert, deleteAlert,
+  type IbkrStatusData, type AlertData,
 } from '../lib/api';
+import { AlertsSection } from '../components/system/AlertsSection';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -196,11 +199,56 @@ export default function SystemPage() {
 
   const [settingsSubTab, setSettingsSubTab] = useState<'connections' | 'config'>('connections');
 
+  // Alerts tab state
+  const [alerts, setAlerts]       = useState<AlertData[]>([]);
+  const [alertsLoaded, setAlertsLoaded] = useState(false);
+  const [newAlert, setNewAlert]   = useState({ ticker: '', condition: '', threshold: '' });
+
+  const loadAlerts = useCallback(async () => {
+    try {
+      const d = await getAlerts();
+      setAlerts(d?.alerts ?? []);
+      setAlertsLoaded(true);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'alerts' && !alertsLoaded) loadAlerts();
+  }, [tab, alertsLoaded, loadAlerts]);
+
+  const handleAddAlert = async () => {
+    if (!newAlert.ticker) return;
+    try {
+      await addAlert({ ticker: newAlert.ticker, condition: newAlert.condition, threshold: newAlert.threshold });
+      setNewAlert({ ticker: '', condition: '', threshold: '' });
+      await loadAlerts();
+    } catch (e: any) { setError(String(e)); }
+  };
+
+  const handleDeleteAlert = async (id: string) => {
+    try { await deleteAlert(id); await loadAlerts(); }
+    catch (e: any) { setError(String(e)); }
+  };
+
   const TABS = [
     { key: 'strategy', label: 'Strategy' },
     { key: 'settings', label: 'Settings' },
-    { key: 'scripts',  label: 'Scripts' },
+    { key: 'scripts',  label: 'Scripts'  },
+    { key: 'alerts',   label: 'Alerts'   },
+    { key: 'journal',  label: 'Journal'  },
   ];
+
+  // Tab keyboard shortcuts: 1-5
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (['INPUT','SELECT','TEXTAREA'].includes(target.tagName)) return;
+      const n = parseInt(e.key, 10);
+      if (n >= 1 && n <= TABS.length) setTab(TABS[n - 1].key);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   return (
     <Layout title="System" onRefresh={load} loading={loading} lastUpdated={updatedAt}>
@@ -274,6 +322,127 @@ export default function SystemPage() {
           onRun={handleRunScript}
         />
       )}
+
+      {tab === 'alerts' && (
+        <AlertsSection
+          alerts={alerts}
+          newAlert={newAlert}
+          onNewAlertChange={setNewAlert}
+          onAdd={handleAddAlert}
+          onDelete={handleDeleteAlert}
+        />
+      )}
+
+      {tab === 'journal' && <JournalTab />}
     </Layout>
+  );
+}
+
+// ── JournalTab ────────────────────────────────────────────────────────────────
+
+function JournalTab() {
+  const [entries, setEntries]   = useState<any[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [draft, setDraft]       = useState('');
+  const [posting, setPosting]   = useState(false);
+  const [postErr, setPostErr]   = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const d = await getJournal();
+      const raw = d?.entries ?? d?.journal ?? (Array.isArray(d) ? d : []);
+      setEntries([...raw].reverse());
+    } catch (e: any) {
+      setEntries([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handlePost = async () => {
+    const text = draft.trim();
+    if (!text) return;
+    setPosting(true); setPostErr(null);
+    try {
+      await addJournalEntry({ note: text, entry: text });
+      setDraft('');
+      await load();
+    } catch (e: any) {
+      setPostErr(String(e));
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760 }}>
+      {/* New entry */}
+      <Card title="New Entry">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handlePost(); }}
+            placeholder="Trade note, observation, or decision log… (⌘↵ to post)"
+            rows={4}
+            style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 13, padding: '10px 12px', boxSizing: 'border-box' }}
+          />
+          {postErr && <div style={{ color: 'var(--red)', fontSize: 12 }}>{postErr}</div>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              onClick={handlePost}
+              disabled={posting || !draft.trim()}
+              style={{
+                background: draft.trim() ? 'var(--accent)' : 'var(--surface2)',
+                color: draft.trim() ? '#fff' : 'var(--muted)',
+                border: 'none',
+                padding: '7px 20px', fontWeight: 600, fontSize: 13,
+                cursor: draft.trim() ? 'pointer' : 'default',
+              }}
+            >
+              {posting ? 'Posting…' : 'Post Entry'}
+            </button>
+          </div>
+        </div>
+      </Card>
+
+      {/* Entry list */}
+      <Card title={`Journal${entries.length ? ` — ${entries.length} entries` : ''}`} action={
+        <button onClick={load} style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', color: 'var(--muted)', fontSize: 11, padding: '3px 10px' }}>
+          ↻ Refresh
+        </button>
+      }>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: 'center' }}><Spinner size={24} /></div>
+        ) : entries.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13, padding: '12px 0' }}>No entries yet. Add your first trade note above.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {entries.map((e: any, i: number) => {
+              const ts = e.timestamp ?? e.created_at ?? e.date ?? null;
+              const text = e.note ?? e.entry ?? e.text ?? e.content ?? JSON.stringify(e);
+              return (
+                <div key={i} style={{
+                  padding: '12px 14px',
+                  borderRadius: 8,
+                  background: i === 0 ? 'var(--surface2)' : 'var(--surface)',
+                  border: '1px solid var(--border)',
+                }}>
+                  {ts && (
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6, fontFamily: 'monospace' }}>
+                      {new Date(ts).toLocaleString()}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{text}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }

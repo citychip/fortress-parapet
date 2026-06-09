@@ -403,9 +403,9 @@ function QuantDataCapabilities() {
                           <td className="text-right mono" style={{ color: ivrColor, fontWeight: 600 }}>
                             {ivr != null ? ivr.toFixed(1) : '—'}{ivr != null && ivr >= 25 ? ' ✓' : ''}
                           </td>
-                          <td className="text-right mono">{d.current_iv != null ? (d.current_iv * 100).toFixed(1) + '%' : '—'}</td>
-                          <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_high != null ? (d.iv_52w_high * 100).toFixed(1) + '%' : '—'}</td>
-                          <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_low  != null ? (d.iv_52w_low  * 100).toFixed(1) + '%' : '—'}</td>
+                          <td className="text-right mono">{d.current_iv != null ? d.current_iv.toFixed(1) + '%' : '—'}</td>
+                          <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_high != null ? d.iv_52w_high.toFixed(1) + '%' : '—'}</td>
+                          <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_low  != null ? d.iv_52w_low.toFixed(1) + '%'  : '—'}</td>
                         </tr>
                       );
                     })}

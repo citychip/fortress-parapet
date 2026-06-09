@@ -4,7 +4,8 @@ import Layout from '../components/Layout';
 import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getCandidates, type CandidateRow } from '../lib/api';
+import { getCandidates, getStrategyMetrics, getPretradeAll, getCapitalEff, getEarningsVolatility, stageOrder, type CandidateRow } from '../lib/api';
+import { useToast } from '../components/Toast';
 
 // ── Signal tier ───────────────────────────────────────────────────────────────
 
@@ -78,6 +79,30 @@ function GateBadge({ row }: { row: CandidateRow }) {
   );
 }
 
+// ── Strategy badge ────────────────────────────────────────────────────────────
+
+const STRATEGY_STYLE: Record<string, { color: string; bg: string }> = {
+  PMCC:     { color: 'var(--green)',          bg: 'rgba(34,197,94,0.12)' },
+  CSP:      { color: '#38bdf8',               bg: 'rgba(56,189,248,0.12)' },
+  IC:       { color: 'var(--purple, #a78bfa)', bg: 'rgba(167,139,250,0.12)' },
+  PCS:      { color: 'var(--yellow)',          bg: 'rgba(245,158,11,0.12)' },
+  Diagonal: { color: 'var(--muted)',           bg: 'rgba(100,116,139,0.12)' },
+  CC:       { color: 'var(--green)',           bg: 'rgba(34,197,94,0.10)' },
+};
+
+function StrategyBadge({ name, loading }: { name: string | null | undefined; loading?: boolean }) {
+  if (loading) return <span style={{ color: 'var(--muted)', fontSize: 11 }}>…</span>;
+  if (!name)   return <span style={{ color: 'var(--muted)', fontSize: 11 }}>—</span>;
+  const style = STRATEGY_STYLE[name] ?? { color: 'var(--muted)', bg: 'rgba(100,116,139,0.1)' };
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+      color: style.color, background: style.bg, fontFamily: 'monospace',
+      whiteSpace: 'nowrap',
+    }}>{name}</span>
+  );
+}
+
 // ── IVR bar ───────────────────────────────────────────────────────────────────
 
 function IvrBar({ ivr }: { ivr: number | null }) {
@@ -102,19 +127,80 @@ export default function CandidatesPage() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [filter, setFilter]   = useState<'all' | 'ready' | 'blocked' | 'actionable' | 'watch'>('all');
 
+  // Strategy recommendations: ticker → recommended short_name (or null)
+  const [strategyMap, setStrategyMap]           = useState<Map<string, string | null>>(new Map());
+  const [strategyLoading, setStrategyLoading]   = useState<Set<string>>(new Set());
+  // Pretrade: ticker → "PROCEED" | "BLOCKED" | null
+  const [pretradeMap, setPretradeMap]           = useState<Map<string, string | null>>(new Map());
+  // Capital efficiency: ticker → efficiency pct (null if no position)
+  const [effMap, setEffMap]                     = useState<Map<string, number | null>>(new Map());
+  // Earnings volatility: ticker → { implied_move_pct, avg_historical_pct }
+  const [earnVolMap, setEarnVolMap]             = useState<Map<string, { implied: number | null; avg: number | null }>>(new Map());
+
+  const fetchStrategies = useCallback(async (canTradeRows: CandidateRow[]) => {
+    if (!canTradeRows.length) return;
+    const tickers = canTradeRows.map(r => r.ticker);
+    setStrategyLoading(new Set(tickers));
+    const results = await Promise.allSettled(
+      tickers.map(t => getStrategyMetrics(t))
+    );
+    setStrategyMap(prev => {
+      const next = new Map(prev);
+      results.forEach((res, i) => {
+        const ticker = tickers[i];
+        if (res.status === 'fulfilled') {
+          const rec = res.value.strategies?.find(s => s.recommended);
+          next.set(ticker, rec?.short_name ?? null);
+        } else {
+          next.set(ticker, null);
+        }
+      });
+      return next;
+    });
+    setStrategyLoading(new Set());
+  }, []);
+
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
     setError(null);
     try {
       const data = await getCandidates();
-      setRows(data.rows ?? []);
+      const fetched = data.rows ?? [];
+      setRows(fetched);
       setUpdatedAt(data.as_of ?? new Date().toISOString());
+      // Fetch strategy, pretrade, and capital efficiency in background
+      fetchStrategies(fetched.filter(r => r.can_trade));
+      // Pretrade gate
+      getPretradeAll().then(d => {
+        const m = new Map<string, string | null>();
+        for (const r of (d?.results ?? [])) m.set(r.ticker, r.verdict ?? null);
+        setPretradeMap(m);
+      }).catch(() => {});
+      // Capital efficiency (existing positions only)
+      getCapitalEff().then(d => {
+        const m = new Map<string, number | null>();
+        for (const p of (d?.by_position ?? [])) m.set(p.ticker, p.efficiency ?? null);
+        setEffMap(m);
+      }).catch(() => {});
+      // Earnings volatility — fetch in background for all rows
+      Promise.allSettled(
+        fetched.map(r => getEarningsVolatility(r.ticker).then(d => ({ ticker: r.ticker, d })))
+      ).then(results => {
+        const m = new Map<string, { implied: number | null; avg: number | null }>();
+        for (const res of results) {
+          if (res.status === 'fulfilled') {
+            const { ticker, d } = res.value;
+            m.set(ticker, { implied: d?.implied_move_pct ?? null, avg: d?.avg_historical_pct ?? null });
+          }
+        }
+        setEarnVolMap(m);
+      }).catch(() => {});
     } catch (e: any) {
       setError(String(e));
     } finally {
       if (!background) setLoading(false);
     }
-  }, []);
+  }, [fetchStrategies]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -132,7 +218,9 @@ export default function CandidatesPage() {
                    : filter === 'watch'      ? watchList
                    : rows;
 
-  const { sorted: tableSorted, key: sortKey, dir: sortDir, toggle } = useSortable(visible, 'ivr', 'desc');
+  const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
+
+  const { sorted: tableSorted, key: sortKey, dir: sortDir, toggle } = useSortable(visible, 'ivr', 'desc', 'candidates');
   // When no column sort active, keep ready-first default
   const sorted = useMemo(() => {
     if (sortKey) return tableSorted;
@@ -205,21 +293,32 @@ export default function CandidatesPage() {
                 <SortTh label="Earnings" sortKey="days_to_earnings"  activeKey={sortKey} dir={sortDir} onToggle={toggle} align="right" />
                 <SortTh label="Conc%"    sortKey="concentration_pct" activeKey={sortKey} dir={sortDir} onToggle={toggle} align="right" />
                 <th>Gate</th>
+                <th>Pretrade</th>
                 <th>Signal</th>
+                <th>Rec</th>
+                <th className="text-right">Eff%</th>
+                <th className="text-right">Earn Move</th>
               </tr></thead>
               <tbody>
-                {sorted.map((row, i) => {
+                {sorted.flatMap((row, i) => {
                   const rowBg = !row.can_trade ? 'rgba(239,68,68,0.02)' : undefined;
-                  const signalWarn = row.signal && row.signal !== '-' && row.signal !== '';
                   const spreadColor = (row.spread_pp ?? 0) >= 8 ? 'var(--green)'
                     : (row.spread_pp ?? 0) >= 4 ? 'var(--yellow)'
                     : (row.spread_pp ?? 0) < 0 ? 'var(--red)' : 'var(--muted)';
                   const tier = getSignalTier(row.signal);
                   const rowHighlight = tier === 'strong' ? 'rgba(239,68,68,0.04)'
                     : tier === 'sell' ? 'rgba(245,158,11,0.03)' : rowBg;
-                  return (
-                    <tr key={i} style={{ background: rowHighlight, opacity: row.can_trade ? 1 : 0.55 }}>
-                      <td style={{ fontWeight: 700, fontSize: 14 }}>{row.ticker}</td>
+                  const isExpanded = expandedTicker === row.ticker;
+                  return [
+                    <tr
+                      key={row.ticker}
+                      onClick={() => setExpandedTicker(isExpanded ? null : row.ticker)}
+                      style={{ background: rowHighlight, opacity: row.can_trade ? 1 : 0.55, cursor: 'pointer' }}
+                    >
+                      <td style={{ fontWeight: 700, fontSize: 14 }}>
+                        <span style={{ marginRight: 6, fontSize: 9, color: 'var(--muted)', display: 'inline-block', transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+                        {row.ticker}
+                      </td>
                       <td className="text-right mono" style={{ fontSize: 12 }}>
                         {row.price != null ? `$${row.price.toFixed(2)}` : '—'}
                       </td>
@@ -240,9 +339,62 @@ export default function CandidatesPage() {
                         {row.concentration_pct !== 0 ? `${row.concentration_pct > 0 ? '+' : ''}${row.concentration_pct.toFixed(1)}%` : '—'}
                       </td>
                       <td><GateBadge row={row} /></td>
+                      <td>
+                        {(() => {
+                          const v = pretradeMap.get(row.ticker);
+                          if (v == null) return <span style={{ color: 'var(--muted)', fontSize: 11 }}>—</span>;
+                          const ok = v === 'PROCEED';
+                          return (
+                            <span style={{
+                              fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                              color: ok ? 'var(--green)' : 'var(--red)',
+                              background: ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                            }}>{v}</span>
+                          );
+                        })()}
+                      </td>
                       <td><SignalBadge raw={row.signal} /></td>
-                    </tr>
-                  );
+                      <td>
+                        {row.can_trade
+                          ? <StrategyBadge name={strategyMap.get(row.ticker)} loading={strategyLoading.has(row.ticker)} />
+                          : <span style={{ color: 'var(--muted)', fontSize: 11 }}>—</span>
+                        }
+                      </td>
+                      <td className="text-right mono" style={{ fontSize: 12 }}>
+                        {(() => {
+                          const eff = effMap.get(row.ticker);
+                          if (eff == null) return <span style={{ color: 'var(--muted)' }}>—</span>;
+                          const color = eff >= 15 ? 'var(--green)' : eff >= 8 ? 'var(--yellow)' : 'var(--red)';
+                          return <span style={{ color, fontWeight: 600 }}>{eff.toFixed(1)}%</span>;
+                        })()}
+                      </td>
+                      <td className="text-right" style={{ fontSize: 11 }}>
+                        {(() => {
+                          const ev = earnVolMap.get(row.ticker);
+                          if (!ev) return <span style={{ color: 'var(--muted)' }}>—</span>;
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
+                              {ev.implied != null && <span style={{ color: 'var(--accent)', fontFamily: 'monospace' }}>±{ev.implied.toFixed(1)}%</span>}
+                              {ev.avg != null && <span style={{ color: 'var(--muted)', fontFamily: 'monospace' }}>avg ±{ev.avg.toFixed(1)}%</span>}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                    </tr>,
+                    isExpanded && (
+                      <tr key={`${row.ticker}-detail`} style={{ background: 'var(--surface2)' }}>
+                        <td colSpan={14} style={{ padding: '12px 16px' }}>
+                          <CandidateDetail
+                            row={row}
+                            pretrade={pretradeMap.get(row.ticker)}
+                            strategy={strategyMap.get(row.ticker)}
+                            eff={effMap.get(row.ticker)}
+                            ev={earnVolMap.get(row.ticker)}
+                          />
+                        </td>
+                      </tr>
+                    ),
+                  ];
                 })}
               </tbody>
             </table>
@@ -257,5 +409,185 @@ export default function CandidatesPage() {
         </div>
       )}
     </Layout>
+  );
+}
+
+// ── Candidate Detail Panel ────────────────────────────────────────────────────
+
+function DetailChip({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 90 }}>
+      <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'monospace', color: color ?? 'var(--fg)' }}>{value}</span>
+    </div>
+  );
+}
+
+function CandidateDetail({
+  row, pretrade, strategy, eff, ev,
+}: {
+  row: CandidateRow;
+  pretrade: string | null | undefined;
+  strategy: string | null | undefined;
+  eff: number | null | undefined;
+  ev: { implied: number | null; avg: number | null } | undefined;
+}) {
+  const { showToast } = useToast();
+  const [staging, setStaging] = useState(false);
+  const [staged, setStaged] = useState(false);
+  const [stageStrategy, setStageStrategy] = useState(strategy ?? '');
+  const [stageDte, setStageDte] = useState('45');
+  const [showForm, setShowForm] = useState(false);
+
+  const handleStage = async () => {
+    setStaging(true);
+    try {
+      await stageOrder({
+        ticker: row.ticker,
+        strategy: stageStrategy || strategy,
+        target_dte: parseInt(stageDte, 10) || 45,
+        notes: `Staged from Candidates — IVR ${row.ivr?.toFixed(0) ?? '?'}`,
+      });
+      setStaged(true);
+      setShowForm(false);
+      showToast(`${row.ticker} order staged`, 'success');
+      setTimeout(() => setStaged(false), 3000);
+    } catch (e: any) {
+      showToast(`Stage failed: ${e.message}`, 'error');
+    } finally {
+      setStaging(false);
+    }
+  };
+  const spreadColor = (row.spread_pp ?? 0) >= 8 ? 'var(--green)'
+    : (row.spread_pp ?? 0) >= 4 ? 'var(--yellow)'
+    : (row.spread_pp ?? 0) < 0 ? 'var(--red)' : 'var(--muted)';
+
+  const ivrColor = (row.ivr ?? 0) >= 50 ? 'var(--green)'
+    : (row.ivr ?? 0) >= 25 ? 'var(--yellow)' : 'var(--muted)';
+
+  const concColor = Math.abs(row.concentration_pct) > 50 ? 'var(--red)'
+    : Math.abs(row.concentration_pct) > 20 ? 'var(--yellow)' : 'var(--muted)';
+
+  const earnColor = (row.days_to_earnings ?? 999) <= 10 ? 'var(--red)'
+    : (row.days_to_earnings ?? 999) <= 30 ? 'var(--yellow)' : 'var(--muted)';
+
+  const effColor = eff != null ? (eff >= 15 ? 'var(--green)' : eff >= 8 ? 'var(--yellow)' : 'var(--red)') : 'var(--muted)';
+
+  // Gate reason as readable text
+  const gateNote = (() => {
+    if (row.excluded) return 'Excluded from universe';
+    if (row.earnings_state === 'blackout') return 'Earnings blackout window';
+    if (row.concentration_state === 'high') return 'Position concentration too high';
+    if (row.earnings_state === 'approaching') return `Earnings in ${row.days_to_earnings}d — caution`;
+    if (row.concentration_state === 'moderate') return 'Moderate concentration — watch';
+    return 'All gates clear';
+  })();
+
+  const gateColor = !row.can_trade ? 'var(--red)'
+    : (row.earnings_state === 'approaching' || row.concentration_state === 'moderate') ? 'var(--yellow)'
+    : 'var(--green)';
+
+  return (
+    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      {/* Vol context */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <DetailChip label="IVR" value={row.ivr != null ? `${row.ivr.toFixed(0)}` : '—'} color={ivrColor} />
+        <DetailChip label="IV" value={row.current_iv != null ? `${row.current_iv.toFixed(1)}%` : '—'} />
+        <DetailChip label="HV20" value={row.hv20 != null ? `${row.hv20.toFixed(1)}%` : '—'} />
+        <DetailChip label="IV–HV spread" value={row.spread_pp != null ? `${row.spread_pp > 0 ? '+' : ''}${row.spread_pp.toFixed(1)}pp` : '—'} color={spreadColor} />
+      </div>
+
+      <div style={{ width: 1, background: 'var(--border)', alignSelf: 'stretch' }} />
+
+      {/* Risk context */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <DetailChip label="Earnings" value={row.days_to_earnings != null ? `${row.days_to_earnings}d` : '—'} color={earnColor} />
+        <DetailChip label="Earn state" value={row.earnings_state ?? '—'} color={earnColor} />
+        <DetailChip label="Conc%" value={row.concentration_pct !== 0 ? `${row.concentration_pct > 0 ? '+' : ''}${row.concentration_pct.toFixed(1)}%` : '—'} color={concColor} />
+      </div>
+
+      <div style={{ width: 1, background: 'var(--border)', alignSelf: 'stretch' }} />
+
+      {/* Gate + pretrade */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Gate reason</span>
+          <span style={{ fontSize: 12, color: gateColor }}>{gateNote}</span>
+        </div>
+        <DetailChip
+          label="Pretrade"
+          value={pretrade ?? '—'}
+          color={pretrade === 'PROCEED' ? 'var(--green)' : pretrade === 'BLOCKED' ? 'var(--red)' : 'var(--muted)'}
+        />
+      </div>
+
+      <div style={{ width: 1, background: 'var(--border)', alignSelf: 'stretch' }} />
+
+      {/* Strategy + efficiency + earn move */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <DetailChip label="Rec strategy" value={strategy ?? '—'} color="var(--accent)" />
+        <DetailChip label="Cap eff" value={eff != null ? `${eff.toFixed(1)}%` : '—'} color={effColor} />
+        {ev && (
+          <>
+            {ev.implied != null && <DetailChip label="Impl move" value={`±${ev.implied.toFixed(1)}%`} color="var(--accent)" />}
+            {ev.avg != null && <DetailChip label="Avg move" value={`±${ev.avg.toFixed(1)}%`} color="var(--muted)" />}
+          </>
+        )}
+      </div>
+
+      <div style={{ width: 1, background: 'var(--border)', alignSelf: 'stretch' }} />
+
+      {/* Stage trade */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {!showForm ? (
+          <button
+            onClick={() => { setStageStrategy(strategy ?? ''); setShowForm(true); }}
+            disabled={staging}
+            style={{
+              background: staged ? 'rgba(34,197,94,0.15)' : 'var(--accent)',
+              color: staged ? 'var(--green)' : '#fff',
+              border: staged ? '1px solid rgba(34,197,94,0.4)' : 'none',
+              borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 600,
+              cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            {staged ? '✓ Staged' : '⊕ Stage Trade'}
+          </button>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 180 }}>
+            <input
+              value={stageStrategy}
+              onChange={e => setStageStrategy(e.target.value)}
+              placeholder="Strategy (e.g. PMCC)"
+              style={{ fontSize: 12, padding: '4px 8px', borderRadius: 4, background: 'var(--surface2)', border: '1px solid var(--border2)', color: 'var(--fg)' }}
+            />
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                value={stageDte}
+                onChange={e => setStageDte(e.target.value)}
+                placeholder="DTE"
+                style={{ width: 60, fontSize: 12, padding: '4px 8px', borderRadius: 4, background: 'var(--surface2)', border: '1px solid var(--border2)', color: 'var(--fg)' }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>DTE</span>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={handleStage}
+                disabled={staging}
+                style={{ flex: 1, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 5, padding: '5px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+              >
+                {staging ? '…' : 'Stage'}
+              </button>
+              <button
+                onClick={() => setShowForm(false)}
+                style={{ background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border2)', borderRadius: 5, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

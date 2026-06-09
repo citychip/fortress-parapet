@@ -254,12 +254,54 @@ export interface CandidateRow {
 export const getCandidates = () =>
   req<{ as_of: string | null; rows: CandidateRow[] }>('/api/candidates');
 
+export interface StrategyOption {
+  short_name: string;
+  recommended: boolean;
+  regime_score: number;
+  annualized_yield?: number | null;
+  capital_required?: number | null;
+}
+export interface StrategyMetrics {
+  regime: string;
+  ivr: number | null;
+  earnings_safe?: boolean;
+  strategies: StrategyOption[];
+}
+export const getStrategyMetrics = (ticker: string, mode = 'new', target_dte = 45) =>
+  req<StrategyMetrics>(
+    `/api/options/strategy_metrics?ticker=${encodeURIComponent(ticker)}&mode=${mode}&target_dte=${target_dte}`
+  );
+
+// ── Manage / Triage ──────────────────────────────────────────────────────────
+export const getTimeOfDay   = () => req<any>('/api/run/time_of_day');
+export const getRollAll     = () => req<any>('/api/manage/roll_all');
+export const getStopLossAll = () => req<any>('/api/manage/stop_loss_all');
+export const getPretradeAll = () => req<any>('/api/manage/pretrade_all');
+export const evaluateRoll   = (ticker: string) =>
+  req<any>(`/api/manage/evaluate_roll?ticker=${encodeURIComponent(ticker)}`);
+
+// ── Options analytics ────────────────────────────────────────────────────────
+export const getGex          = (ticker: string) => req<any>(`/api/options/gex/${encodeURIComponent(ticker)}`);
+export const getVolSkew      = (ticker: string) => req<any>(`/api/options/vol-skew/${encodeURIComponent(ticker)}`);
+export const getVolAnalytics = (ticker: string) => req<any>(`/api/options/vol-analytics?ticker=${encodeURIComponent(ticker)}`);
+
+// ── Reports ──────────────────────────────────────────────────────────────────
+export const getTradeReport       = () => req<any>('/api/manage/trade_report');
+export const getPositionLimits    = (ticker: string, legs: any[]) => {
+  const params = new URLSearchParams({ ticker, legs: JSON.stringify(legs) });
+  return req<any>(`/api/options/position-limits?${params.toString()}`);
+};
+export const getEarningsVolatility = (ticker: string) =>
+  req<any>(`/api/market/earnings-volatility/${encodeURIComponent(ticker)}`);
+
 // ── Orders ───────────────────────────────────────────────────────────────────
 export const getPendingOrders  = () => req<{ orders?: OrderData[]; pending?: OrderData[] }>('/api/orders/pending');
 export const approveOrder      = (id: string) =>
   req<any>(`/api/orders/pending/${id}/approve`, { method: 'POST' });
 export const declineOrder      = (id: string) =>
   req<any>(`/api/orders/pending/${id}`, { method: 'DELETE' });
+export const stageOrder        = (body: any) =>
+  req<any>('/api/orders/stage', { method: 'POST', body: JSON.stringify(body) });
 
 // ── Alerts ───────────────────────────────────────────────────────────────────
 export const getAlerts         = () => req<{ alerts: AlertData[] }>('/api/alerts');
