@@ -118,6 +118,30 @@ function IvrBar({ ivr }: { ivr: number | null }) {
   );
 }
 
+// ── Vol math ──────────────────────────────────────────────────────────────────
+
+function normCDF(x: number): number {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  const d = 1 - (1 / Math.sqrt(2 * Math.PI)) * Math.exp(-0.5 * x * x) * poly;
+  return x >= 0 ? d : 1 - d;
+}
+
+/** Probability that stock closes ABOVE strike at expiry (PoP for a short put).
+ *  iv: percentage form (35 = 35%). Returns 0–100. */
+function calcPoP(spot: number, strike: number, dte: number, ivPct: number, r = 0.045): number {
+  const T = dte / 365;
+  const sigma = ivPct / 100;
+  if (T <= 0 || sigma <= 0 || spot <= 0 || strike <= 0) return 0;
+  const d2 = (Math.log(spot / strike) + (r - 0.5 * sigma * sigma) * T) / (sigma * Math.sqrt(T));
+  return normCDF(d2) * 100;
+}
+
+/** Expected 1-standard-deviation move in $ */
+function calc1SD(spot: number, ivPct: number, dte: number): number {
+  return spot * (ivPct / 100) * Math.sqrt(dte / 365);
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CandidatesPage() {
@@ -554,7 +578,31 @@ function CandidateDetail({
             {staged ? '✓ Staged' : '⊕ Stage Trade'}
           </button>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 180 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 200 }}>
+            {/* Vol context: 1-SD move + ATM PoP */}
+            {row.price != null && row.current_iv != null && (
+              <div style={{
+                background: 'var(--surface2)', border: '1px solid var(--border2)',
+                borderRadius: 6, padding: '6px 10px', fontSize: 11,
+              }}>
+                {(() => {
+                  const dte = parseInt(stageDte, 10) || 45;
+                  const sd = calc1SD(row.price, row.current_iv, dte);
+                  const pop = calcPoP(row.price, row.price, dte, row.current_iv);
+                  const sdPct = (sd / row.price * 100).toFixed(1);
+                  return (
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--muted)' }}>
+                        1-SD <span style={{ color: 'var(--accent)', fontFamily: 'monospace', fontWeight: 600 }}>±${sd.toFixed(2)}</span> (±{sdPct}%)
+                      </span>
+                      <span style={{ color: 'var(--muted)' }}>
+                        ATM PoP <span style={{ color: pop > 55 ? 'var(--green)' : pop > 45 ? 'var(--yellow)' : 'var(--red)', fontFamily: 'monospace', fontWeight: 600 }}>{pop.toFixed(0)}%</span>
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
             <input
               value={stageStrategy}
               onChange={e => setStageStrategy(e.target.value)}

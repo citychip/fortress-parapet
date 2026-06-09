@@ -7,6 +7,10 @@ import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { getCalendar, fetchEarnings, getQuantDataReports, getUniverse, getIvRank, getGex, getVolSkew, getVolAnalytics, type IvRankData } from '../lib/api';
 import { UniverseSection } from '../components/system/UniverseSection';
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine,
+  ResponsiveContainer, CartesianGrid, Legend,
+} from 'recharts';
 
 export default function MarketPage() {
   const [tab, setTab]           = useState('analytics');
@@ -312,55 +316,43 @@ function GexChart({ data, ticker }: { data: any; ticker: string }) {
 }
 
 function VolSkewChart({ data, ticker }: { data: any; ticker: string }) {
-  // data: {spot_price, atm_iv (already %), skew_25d, expiry, strikes: [{strike, call_iv (%), put_iv (%)}]}
+  // data: {spot_price, atm_iv (already %), skew_25d, expiry, strikes: [{strike, call_iv, put_iv, mid_iv}]}
   const strikes: any[] = data.strikes ?? [];
-  if (!strikes.length) return (
-    <Card title={`${ticker} Vol Skew`}>
+  const spot = data.spot_price ?? data.spot ?? 0;
+  const atmIv = data.atm_iv ?? null;
+  const skewSlope = data.skew_25d ?? null;
+
+  const validPts = strikes
+    .filter((s: any) => (s.mid_iv ?? s.call_iv ?? s.put_iv) != null)
+    .sort((a: any, b: any) => a.strike - b.strike)
+    .map((s: any) => ({
+      strike: s.strike,
+      callIv: s.call_iv ?? null,
+      putIv:  s.put_iv  ?? null,
+      midIv:  s.mid_iv  ?? (s.call_iv != null && s.put_iv != null ? (s.call_iv + s.put_iv) / 2 : null),
+    }));
+
+  if (!validPts.length) return (
+    <Card title={`${ticker} Vol Skew${data.expiry ? ` — ${data.expiry}` : ''}`}>
       <p style={{ color: 'var(--muted)', fontSize: 13 }}>No skew data.</p>
     </Card>
   );
 
-  const spot = data.spot_price ?? data.spot ?? 0;
-  const atmIv = data.atm_iv ?? null;          // already in % (e.g. 51.7 means 51.7%)
-  const skewSlope = data.skew_25d ?? null;
+  const hasCall = validPts.some((p: any) => p.callIv != null);
+  const hasPut  = validPts.some((p: any) => p.putIv  != null);
+  const hasMid  = validPts.some((p: any) => p.midIv  != null);
 
-  const W = 560, H = 180;
-  const M = { top: 16, right: 16, bottom: 32, left: 52 };
-  const iW = W - M.left - M.right;
-  const iH = H - M.top - M.bottom;
-
-  // Use mid_iv or call_iv/put_iv
-  const validPts = strikes.filter(s => (s.mid_iv ?? s.call_iv ?? s.put_iv) != null);
-  if (!validPts.length) return (
-    <Card title={`${ticker} Vol Skew`}>
-      <p style={{ color: 'var(--muted)', fontSize: 13 }}>No IV data in strikes.</p>
-    </Card>
-  );
-
-  const xs = validPts.map(s => s.strike);
-  const xMin = Math.min(...xs), xMax = Math.max(...xs);
-  const midIvs = validPts.map(s => s.mid_iv ?? ((s.call_iv ?? 0) + (s.put_iv ?? 0)) / 2);
-  const callIvs = validPts.map(s => s.call_iv);
-  const putIvs  = validPts.map(s => s.put_iv);
-  const allIvs  = [...midIvs, ...callIvs.filter(Boolean), ...putIvs.filter(Boolean)] as number[];
-  const yLo = Math.max(0, Math.min(...allIvs) * 0.9);
-  const yHi = Math.max(...allIvs) * 1.1;
-
-  const toX = (v: number) => M.left + ((v - xMin) / (xMax - xMin || 1)) * iW;
-  const toY = (v: number) => M.top + (1 - (v - yLo) / (yHi - yLo)) * iH;
-
-  const mkLine = (ivArr: (number | null)[]) =>
-    validPts
-      .map((s, i) => ivArr[i] != null ? `${toX(s.strike).toFixed(1)},${toY(ivArr[i] as number).toFixed(1)}` : null)
-      .filter(Boolean).join(' ');
-
-  const midLine  = mkLine(midIvs);
-  const callLine = mkLine(callIvs);
-  const putLine  = mkLine(putIvs);
-  const xSpot    = toX(spot);
-
-  const xTicks = [0, 0.25, 0.5, 0.75, 1].map(t => xMin + t * (xMax - xMin));
-  const yTicks = [0, 0.33, 0.67, 1].map(t => yLo + t * (yHi - yLo));
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4, fontFamily: 'monospace' }}>${label}</div>
+        {payload.map((p: any) => (
+          <div key={p.name} style={{ color: p.color }}>{p.name}: {p.value?.toFixed(1)}%</div>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <Card title={`${ticker} Vol Skew${data.expiry ? ` — ${data.expiry}` : ''}`}>
@@ -369,72 +361,66 @@ function VolSkewChart({ data, ticker }: { data: any; ticker: string }) {
         {skewSlope != null && <KVChip label="25d Skew" value={`${skewSlope > 0 ? '+' : ''}${skewSlope.toFixed(1)}pp`} color={skewSlope > 0 ? 'var(--red)' : 'var(--muted)'} />}
         {spot > 0 && <KVChip label="Spot" value={`$${spot.toFixed(0)}`} color="var(--muted)" />}
       </div>
-      {/* Legend */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
-        {callLine && <span style={{ fontSize: 11, color: 'rgba(34,197,94,0.9)' }}>■ Call IV</span>}
-        {putLine  && <span style={{ fontSize: 11, color: 'rgba(239,68,68,0.9)'  }}>■ Put IV</span>}
-        {midLine  && <span style={{ fontSize: 11, color: '#38bdf8' }}>■ Mid IV</span>}
-      </div>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 200, display: 'block' }}>
-        <rect x={M.left} y={M.top} width={iW} height={iH} fill="rgba(0,0,0,0.12)" rx={3} />
-        {yTicks.map((v, i) => (
-          <g key={i}>
-            <line x1={M.left} x2={M.left + iW} y1={toY(v)} y2={toY(v)} stroke="var(--border)" strokeWidth={0.5} opacity={0.6} />
-            <text x={M.left - 4} y={toY(v) + 4} textAnchor="end" fill="var(--muted)" fontSize={9}>{v.toFixed(0)}%</text>
-          </g>
-        ))}
-        {/* Spot line */}
-        {xSpot >= M.left && xSpot <= M.left + iW && (
-          <line x1={xSpot} x2={xSpot} y1={M.top} y2={H - M.bottom} stroke="var(--accent)" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
-        )}
-        {/* Call IV */}
-        {callLine && <polyline points={callLine} fill="none" stroke="rgba(34,197,94,0.75)" strokeWidth={1.5} />}
-        {/* Put IV */}
-        {putLine  && <polyline points={putLine}  fill="none" stroke="rgba(239,68,68,0.75)"  strokeWidth={1.5} />}
-        {/* Mid IV */}
-        {midLine  && <polyline points={midLine}  fill="none" stroke="#38bdf8" strokeWidth={2} />}
-        {/* X ticks */}
-        {xTicks.map((v, i) => (
-          <text key={i} x={toX(v)} y={H - M.bottom + 12} textAnchor="middle" fill="var(--muted)" fontSize={9}>${v.toFixed(0)}</text>
-        ))}
-      </svg>
+      <ResponsiveContainer width="100%" height={200}>
+        <LineChart data={validPts} margin={{ top: 8, right: 16, bottom: 8, left: 40 }}>
+          <CartesianGrid stroke="var(--border)" strokeOpacity={0.3} vertical={false} />
+          <XAxis
+            dataKey="strike"
+            tickFormatter={(v: number) => `$${v}`}
+            tick={{ fill: 'var(--muted)', fontSize: 10 }}
+            tickLine={false}
+            axisLine={{ stroke: 'var(--border)' }}
+          />
+          <YAxis
+            tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+            tick={{ fill: 'var(--muted)', fontSize: 10 }}
+            tickLine={false}
+            axisLine={false}
+            width={38}
+          />
+          <Tooltip content={<CustomTooltip />} />
+          {spot > 0 && (
+            <ReferenceLine x={spot} stroke="var(--accent)" strokeDasharray="4 3" strokeOpacity={0.8} label={{ value: `$${spot.toFixed(0)}`, fill: 'var(--accent)', fontSize: 10, position: 'top' }} />
+          )}
+          {hasCall && <Line type="monotone" dataKey="callIv" name="Call IV" stroke="rgba(34,197,94,0.85)" strokeWidth={2} dot={false} />}
+          {hasPut  && <Line type="monotone" dataKey="putIv"  name="Put IV"  stroke="rgba(239,68,68,0.85)" strokeWidth={2} dot={false} />}
+          {hasMid  && <Line type="monotone" dataKey="midIv"  name="Mid IV"  stroke="#38bdf8"              strokeWidth={2} dot={false} />}
+        </LineChart>
+      </ResponsiveContainer>
     </Card>
   );
 }
 
 
 function VolSkewSvg({ puts, calls, spot }: { puts: any[]; calls: any[]; spot: number }) {
-  const all  = [...puts, ...calls];
+  const all = [...puts, ...calls];
   if (!all.length) return null;
 
-  const W = 600, H = 220;
-  const M = { top: 16, right: 16, bottom: 32, left: 52 };
-  const iW = W - M.left - M.right;
-  const iH = H - M.top - M.bottom;
+  // Merge puts + calls into unified strike array for Recharts
+  const strikeMap = new Map<number, { strike: number; putIv?: number; callIv?: number }>();
+  for (const r of puts.sort((a, b) => a.strike - b.strike)) {
+    strikeMap.set(r.strike, { strike: r.strike, putIv: r.iv });
+  }
+  for (const r of calls.sort((a, b) => a.strike - b.strike)) {
+    const existing = strikeMap.get(r.strike) ?? { strike: r.strike };
+    strikeMap.set(r.strike, { ...existing, callIv: r.iv });
+  }
+  const chartData = Array.from(strikeMap.values()).sort((a, b) => a.strike - b.strike);
 
-  const xs   = all.map(r => r.strike);
-  const ivs  = all.map(r => r.iv);
-  const xMin = Math.min(...xs), xMax = Math.max(...xs);
-  const yLo  = Math.max(0, Math.min(...ivs) * 0.9);
-  const yHi  = Math.max(...ivs) * 1.1;
+  const atmPut  = puts.length  ? [...puts].sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot))[0] : null;
+  const atmCall = calls.length ? [...calls].sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot))[0] : null;
 
-  const toX = (v: number) => M.left + ((v - xMin) / (xMax - xMin || 1)) * iW;
-  const toY = (v: number) => M.top  + (1 - (v - yLo) / (yHi - yLo)) * iH;
-
-  const mkLine = (pts: any[]) =>
-    pts.sort((a, b) => a.strike - b.strike)
-       .map(r => `${toX(r.strike).toFixed(1)},${toY(r.iv).toFixed(1)}`)
-       .join(' ');
-
-  const putLine  = mkLine(puts);
-  const callLine = mkLine(calls);
-  const xSpot    = toX(spot);
-  const yTicks   = [0, 0.33, 0.67, 1].map(t => yLo + t * (yHi - yLo));
-  const xTicks   = [0, 0.25, 0.5, 0.75, 1].map(t => xMin + t * (xMax - xMin));
-
-  // ATM IV at spot
-  const atmPut  = [...puts].sort((a,b) => Math.abs(a.strike-spot) - Math.abs(b.strike-spot))[0];
-  const atmCall = [...calls].sort((a,b) => Math.abs(a.strike-spot) - Math.abs(b.strike-spot))[0];
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4, fontFamily: 'monospace' }}>${label}</div>
+        {payload.map((p: any) => (
+          <div key={p.name} style={{ color: p.color }}>{p.name}: {p.value?.toFixed(1)}%</div>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -444,26 +430,31 @@ function VolSkewSvg({ puts, calls, spot }: { puts: any[]; calls: any[]; spot: nu
         {atmPut  && <span style={{ fontSize: 11, color: 'var(--muted)' }}>ATM Put {atmPut.iv.toFixed(1)}%</span>}
         {atmCall && <span style={{ fontSize: 11, color: 'var(--muted)' }}>ATM Call {atmCall.iv.toFixed(1)}%</span>}
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 220, display: 'block' }}>
-        <rect x={M.left} y={M.top} width={iW} height={iH} fill="rgba(0,0,0,0.12)" rx={3} />
-        {yTicks.map((v, i) => (
-          <g key={i}>
-            <line x1={M.left} x2={M.left+iW} y1={toY(v)} y2={toY(v)} stroke="var(--border)" strokeWidth={0.5} opacity={0.6} />
-            <text x={M.left-4} y={toY(v)+4} textAnchor="end" fill="var(--muted)" fontSize={9}>{v.toFixed(0)}%</text>
-          </g>
-        ))}
-        {xSpot >= M.left && xSpot <= M.left+iW && (
-          <g>
-            <line x1={xSpot} x2={xSpot} y1={M.top} y2={H-M.bottom} stroke="var(--accent)" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.75} />
-            <text x={xSpot+4} y={M.top+11} fill="var(--accent)" fontSize={9} fontWeight="600">${spot.toFixed(0)}</text>
-          </g>
-        )}
-        {putLine  && <polyline points={putLine}  fill="none" stroke="rgba(239,68,68,0.8)"  strokeWidth={2} />}
-        {callLine && <polyline points={callLine} fill="none" stroke="rgba(34,197,94,0.8)"  strokeWidth={2} />}
-        {xTicks.map((v, i) => (
-          <text key={i} x={toX(v)} y={H-M.bottom+12} textAnchor="middle" fill="var(--muted)" fontSize={9}>${v.toFixed(0)}</text>
-        ))}
-      </svg>
+      <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 8, left: 40 }}>
+          <CartesianGrid stroke="var(--border)" strokeOpacity={0.3} vertical={false} />
+          <XAxis
+            dataKey="strike"
+            tickFormatter={(v: number) => `$${v}`}
+            tick={{ fill: 'var(--muted)', fontSize: 10 }}
+            tickLine={false}
+            axisLine={{ stroke: 'var(--border)' }}
+          />
+          <YAxis
+            tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+            tick={{ fill: 'var(--muted)', fontSize: 10 }}
+            tickLine={false}
+            axisLine={false}
+            width={38}
+          />
+          <Tooltip content={<CustomTooltip />} />
+          {spot > 0 && (
+            <ReferenceLine x={spot} stroke="var(--accent)" strokeDasharray="4 3" strokeOpacity={0.8} label={{ value: `$${spot.toFixed(0)}`, fill: 'var(--accent)', fontSize: 10, position: 'top' }} />
+          )}
+          <Line type="monotone" dataKey="putIv"  name="Put IV"  stroke="rgba(239,68,68,0.85)" strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="callIv" name="Call IV" stroke="rgba(34,197,94,0.85)" strokeWidth={2} dot={false} />
+        </LineChart>
+      </ResponsiveContainer>
     </>
   );
 }

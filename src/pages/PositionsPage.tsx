@@ -84,71 +84,7 @@ export default function PositionsPage() {
       {tab === 'legs' && <LegsTab legs={posLegs} />}
 
       {tab === 'exposure' && (
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          {sector && (
-            <Card title="Sector Exposure" style={{ flex: 1, minWidth: 280 }}>
-              <table>
-                <thead><tr>
-                  <th>Sector</th>
-                  <th className="text-right">Notional</th>
-                  <th className="text-right">Pct</th>
-                  <th>Tickers</th>
-                </tr></thead>
-                <tbody>
-                  {(Array.isArray(sector) ? sector : sector?.sectors ?? Object.entries(sector).map(([k,v]:any)=>({sector:k,...(typeof v==='object'?v:{pct:v})}))).map((s: any, i: number) => (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{s.sector ?? s.name ?? '—'}</td>
-                      <td className="text-right mono">{s.notional != null ? fmt$(s.notional, 0) : '—'}</td>
-                      <td className="text-right mono">{s.pct != null ? `${s.pct.toFixed(1)}%` : '—'}</td>
-                      <td style={{ color: 'var(--muted)', fontSize: 12 }}>{Array.isArray(s.tickers) ? s.tickers.join(', ') : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-          )}
-          {beta && (
-            <div style={{ flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div style={{ display: 'flex', gap: 12 }}>
-                {[
-                  { label: 'β-Wtd Delta', value: beta.beta_weighted_delta?.toFixed(1) ?? '—' },
-                  { label: 'SPY Price',   value: beta.spy_price ? `$${beta.spy_price}` : '—' },
-                ].map((s, i) => (
-                  <div key={i} style={{ flex: 1, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px' }}>
-                    <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6, textTransform: 'uppercase' }}>{s.label}</div>
-                    <div className="mono" style={{ fontSize: 18, fontWeight: 700 }}>{s.value}</div>
-                  </div>
-                ))}
-              </div>
-              {beta.component_betas?.length > 0 && (
-                <Card title="Beta by Ticker">
-                  <table>
-                    <thead><tr>
-                      <th>Ticker</th>
-                      <th className="text-right">Beta</th>
-                      <th className="text-right">Price</th>
-                      <th className="text-right">Δ Contribution</th>
-                    </tr></thead>
-                    <tbody>
-                      {beta.component_betas
-                        .sort((a: any, b: any) => Math.abs(b.delta_contribution ?? 0) - Math.abs(a.delta_contribution ?? 0))
-                        .map((c: any, i: number) => (
-                          <tr key={i}>
-                            <td style={{ fontWeight: 600 }}>{c.ticker}</td>
-                            <td className="text-right mono">{c.beta?.toFixed(3) ?? '—'}</td>
-                            <td className="text-right mono">{c.price ? `$${c.price}` : '—'}</td>
-                            <td className={`text-right mono ${(c.delta_contribution ?? 0) >= 0 ? 'text-green' : 'text-red'}`}>
-                              {c.delta_contribution?.toFixed(2) ?? '—'}
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </Card>
-              )}
-            </div>
-          )}
-        </div>
+        <ExposureTab sector={sector} beta={beta} />
       )}
 
       {tab === 'forwardpnl' && <ForwardPnlTab positions={posLegs} />}
@@ -301,6 +237,166 @@ function PnlHistoryChart({ rows }: { rows: any[] }) {
       {xTicks.map((p, i) => <text key={i} x={toX(pts.indexOf(p))} y={H - M.bottom + 12} textAnchor="middle" fill="var(--muted)" fontSize={8}>{p.date.slice(5)}</text>)}
       <text x={M.left + iW - 4} y={toY(finalPnl) - 5} textAnchor="end" fill={isPos ? 'var(--green)' : 'var(--red)'} fontSize={10} fontWeight="700">{fmtK(finalPnl)}</text>
     </svg>
+  );
+}
+
+// ── Exposure Tab ──────────────────────────────────────────────────────────────
+
+const SECTOR_COLORS = [
+  'rgba(99,102,241,0.7)',   // indigo
+  'rgba(34,197,94,0.7)',    // green
+  'rgba(245,158,11,0.7)',   // yellow
+  'rgba(239,68,68,0.7)',    // red
+  'rgba(56,189,248,0.7)',   // sky
+  'rgba(167,139,250,0.7)',  // violet
+  'rgba(20,184,166,0.7)',   // teal
+  'rgba(251,146,60,0.7)',   // orange
+];
+
+function ExposureTab({ sector, beta }: { sector: any; beta: any }) {
+  const sectors: any[] = sector
+    ? (Array.isArray(sector) ? sector : sector?.sectors ?? Object.entries(sector).map(([k, v]: any) => ({ sector: k, ...(typeof v === 'object' ? v : { pct: v }) })))
+    : [];
+
+  const maxPct = Math.max(...sectors.map((s: any) => Math.abs(s.pct ?? 0)), 1);
+
+  // Beta component rows
+  const betas: any[] = beta?.component_betas
+    ? [...beta.component_betas].sort((a: any, b: any) => Math.abs(b.delta_contribution ?? 0) - Math.abs(a.delta_contribution ?? 0))
+    : [];
+  const maxDelta = Math.max(...betas.map((c: any) => Math.abs(c.delta_contribution ?? 0)), 1);
+
+  const bwd = beta?.beta_weighted_delta ?? null;
+  const bwdColor = bwd == null ? 'var(--muted)' : bwd > 0 ? 'var(--green)' : 'var(--red)';
+  // Target: 0.35 net long delta; show how far off
+  const deltaTarget = 0.35;
+  const deltaOff = bwd != null ? (bwd - deltaTarget).toFixed(2) : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+      {/* Summary stat row */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 140, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 20px' }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>β-Wtd Delta</div>
+          <div className="mono" style={{ fontSize: 22, fontWeight: 700, color: bwdColor }}>{bwd?.toFixed(2) ?? '—'}</div>
+          {deltaOff != null && (
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+              target 0.35 · {Number(deltaOff) >= 0 ? '+' : ''}{deltaOff} off
+            </div>
+          )}
+        </div>
+        {bwd != null && (
+          <div style={{ flex: 1, minWidth: 140, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 20px' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>Delta vs Target</div>
+            <div style={{ height: 8, background: 'var(--surface2)', borderRadius: 4, marginTop: 8, marginBottom: 6, position: 'relative' }}>
+              {/* Center line at target (0.35) */}
+              <div style={{ position: 'absolute', left: `${(deltaTarget / (Math.max(Math.abs(bwd) * 1.5, 1))) * 50 + 50}%`, top: -4, bottom: -4, width: 2, background: 'var(--accent)', borderRadius: 1, opacity: 0.6 }} />
+              {/* Bar from 0 to bwd */}
+              <div style={{
+                position: 'absolute',
+                left: bwd >= 0 ? '50%' : `${50 + (bwd / (Math.max(Math.abs(bwd) * 1.5, 1))) * 50}%`,
+                width: `${(Math.abs(bwd) / (Math.max(Math.abs(bwd) * 1.5, 1))) * 50}%`,
+                height: '100%',
+                background: bwdColor,
+                borderRadius: 4,
+              }} />
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--muted)' }}>SPY: {beta?.spy_price ? `$${beta.spy_price}` : '—'}</div>
+          </div>
+        )}
+        {sectors.length > 0 && (
+          <div style={{ flex: 2, minWidth: 240, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 20px' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 10 }}>Sector Mix</div>
+            {/* Stacked horizontal bar */}
+            <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', gap: 1, marginBottom: 10 }}>
+              {sectors.filter((s: any) => s.pct != null && s.pct > 0).map((s: any, i: number) => (
+                <div key={i} style={{ flex: s.pct, background: SECTOR_COLORS[i % SECTOR_COLORS.length], minWidth: 2 }} title={`${s.sector ?? s.name}: ${s.pct?.toFixed(1)}%`} />
+              ))}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+              {sectors.filter((s: any) => s.pct != null && s.pct > 0).map((s: any, i: number) => (
+                <span key={i} style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: SECTOR_COLORS[i % SECTOR_COLORS.length], display: 'inline-block', flexShrink: 0 }} />
+                  {s.sector ?? s.name} {s.pct?.toFixed(0)}%
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {/* Sector exposure bars */}
+        {sectors.length > 0 && (
+          <Card title="Sector Exposure" style={{ flex: 1, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {sectors.map((s: any, i: number) => {
+                const pct = s.pct ?? 0;
+                const barWidth = Math.min(100, (Math.abs(pct) / maxPct) * 100);
+                const color = SECTOR_COLORS[i % SECTOR_COLORS.length];
+                return (
+                  <div key={i}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>{s.sector ?? s.name ?? '—'}</span>
+                      <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                        {s.notional != null && <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>{fmt$(s.notional, 0)}</span>}
+                        <span style={{ fontSize: 12, fontFamily: 'monospace', fontWeight: 600, color: 'var(--fg)', minWidth: 44, textAlign: 'right' }}>{pct.toFixed(1)}%</span>
+                      </div>
+                    </div>
+                    <div style={{ height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ width: `${barWidth}%`, height: '100%', background: color, borderRadius: 3 }} />
+                    </div>
+                    {Array.isArray(s.tickers) && s.tickers.length > 0 && (
+                      <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{s.tickers.join(' · ')}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        )}
+
+        {/* Beta / delta contribution */}
+        {betas.length > 0 && (
+          <Card title="Δ Contribution by Ticker" style={{ flex: 1, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {betas.map((c: any, i: number) => {
+                const delta = c.delta_contribution ?? 0;
+                const barWidth = Math.min(100, (Math.abs(delta) / maxDelta) * 100);
+                const isPos = delta >= 0;
+                return (
+                  <div key={i}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, minWidth: 44 }}>{c.ticker}</span>
+                        {c.beta != null && <span style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace' }}>β {c.beta.toFixed(2)}</span>}
+                        {c.price && <span style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace' }}>${c.price}</span>}
+                      </div>
+                      <span style={{ fontSize: 12, fontFamily: 'monospace', fontWeight: 700, color: isPos ? 'var(--green)' : 'var(--red)', minWidth: 48, textAlign: 'right' }}>
+                        {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+                      </span>
+                    </div>
+                    <div style={{ height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${barWidth}%`,
+                        height: '100%',
+                        background: isPos ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)',
+                        borderRadius: 3,
+                      }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        )}
+      </div>
+
+      {!sector && !beta && (
+        <p style={{ color: 'var(--muted)', textAlign: 'center', padding: 60 }}>No exposure data loaded.</p>
+      )}
+    </div>
   );
 }
 
