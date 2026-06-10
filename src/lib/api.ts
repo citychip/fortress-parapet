@@ -249,9 +249,20 @@ export interface IvRankData {
   iv_52w_low: number | null;
   call_iv: number | null;
   put_iv: number | null;
+  /** "iv_snapshots" (true IV rank from own history) | "hv_proxy" (cold-start) | undefined (legacy QD) */
+  source?: string;
+  n_snapshots?: number;
 }
-export const getIvRank = (ticker: string) =>
-  req<IvRankData>(`/api/qd/iv-rank/${encodeURIComponent(ticker)}`);
+// Primary: backend yfinance route (/api/options/iv-rank) — added after the
+// upstream quantdata-mcp iv_rank bug (ticker arg ignored, verified 2026-06-10).
+// Falls back to the legacy QD route if the backend route isn't deployed yet.
+export const getIvRank = async (ticker: string): Promise<IvRankData> => {
+  try {
+    const d = await req<IvRankData & { error?: string }>(`/api/options/iv-rank/${encodeURIComponent(ticker)}`);
+    if (!d?.error && d?.iv_rank != null) return d;
+  } catch {}
+  return req<IvRankData>(`/api/qd/iv-rank/${encodeURIComponent(ticker)}`);
+};
 
 export interface CandidateRow {
   ticker: string;

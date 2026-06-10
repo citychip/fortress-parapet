@@ -132,18 +132,20 @@ function AnalyticsTab({ universe }: { universe: string[] }) {
       {/* 1. Scan: universe signal board */}
       <IvRankSection universe={tickers} selected={ticker} onSelect={setTicker} />
 
-      {/* Known issues callout — kept adjacent to the table it qualifies */}
+      {/* Data-source note — kept adjacent to the table it qualifies */}
       <div style={{
-        background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
+        background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.2)',
         borderRadius: 10, padding: '12px 16px',
         display: 'flex', gap: 12, alignItems: 'flex-start',
       }}>
-        <span style={{ color: 'var(--red)', fontSize: 16, flexShrink: 0 }}>⚠</span>
+        <span style={{ color: 'var(--yellow)', fontSize: 16, flexShrink: 0 }}>ℹ</span>
         <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>
-          Upstream quantdata-mcp issues: <code style={{ fontFamily: 'monospace' }}>iv_rank</code> can return identical
-          values per ticker when an explicit expiration is passed; <code style={{ fontFamily: 'monospace' }}>exposure_by_strike</code>{' '}
-          and <code style={{ fontFamily: 'monospace' }}>volatility_skew</code> return empty during market hours.
-          Cross-check via Claude before acting on this table.
+          IV Rank is served by the backend (yfinance) since 2026-06-10 — the upstream quantdata-mcp{' '}
+          <code style={{ fontFamily: 'monospace' }}>iv_rank</code> ignores the ticker argument entirely (every ticker
+          returns identical values; verified SPX/MSFT/NVDA). Rows marked <em>proxy</em> rank current IV within the
+          52-week realized-vol range until ~60 daily IV snapshots accumulate, then switch to true IV rank automatically.
+          QD remains broken upstream for <code style={{ fontFamily: 'monospace' }}>exposure_by_strike</code> and{' '}
+          <code style={{ fontFamily: 'monospace' }}>volatility_skew</code> during market hours.
         </p>
       </div>
 
@@ -590,6 +592,12 @@ function IvRankSection({ universe, selected, onSelect }: {
                   >
                     <td style={{ fontWeight: 600, color: isSel ? 'var(--accent)' : undefined }}>
                       {ticker}
+                      {d.source === 'hv_proxy' && (
+                        <span title={`HV-range proxy — ${d.n_snapshots ?? 0}/60 IV snapshots collected`}
+                          style={{ marginLeft: 6, fontSize: 9, color: 'var(--yellow)', fontWeight: 400, fontStyle: 'italic' }}>
+                          proxy
+                        </span>
+                      )}
                       {m.fromCache && m.cacheLabel && (
                         <span style={{ marginLeft: 6, fontSize: 9, color: 'var(--muted)', fontWeight: 400 }}>
                           {m.cacheLabel}
