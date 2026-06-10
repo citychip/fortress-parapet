@@ -9,9 +9,36 @@ import {
   getBriefing, getIbkrStatus, getAlerts, getPositions, getCandidates,
   getMarketIntel, getSettings, getSpyHedge, getDpFloorsGex, getPcsExposure,
   triggerIbkrSync, getPnl,
-  fmt$,
+  fmt$, fmtPct,
   type BriefingData, type IbkrStatusData, type AlertData, type PnLData,
 } from '../lib/api';
+
+// ── NLV history (for day-over-day Δ) ─────────────────────────────────────────
+
+const NLV_HISTORY_KEY = 'nlv_history';
+
+function loadNlvHistory(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(NLV_HISTORY_KEY) ?? '{}'); } catch { return {}; }
+}
+
+function saveNlvSnapshot(nlv: number) {
+  try {
+    const hist = loadNlvHistory();
+    const today = new Date().toISOString().slice(0, 10);
+    hist[today] = nlv;
+    const keys = Object.keys(hist).sort();
+    while (keys.length > 30) { delete hist[keys.shift()!]; }
+    localStorage.setItem(NLV_HISTORY_KEY, JSON.stringify(hist));
+  } catch {}
+}
+
+function getPriorNlv(): number | null {
+  const hist = loadNlvHistory();
+  const today = new Date().toISOString().slice(0, 10);
+  const keys = Object.keys(hist).filter(k => k < today).sort();
+  if (!keys.length) return null;
+  return hist[keys[keys.length - 1]];
+}
 
 // ── Collapsible section helper ────────────────────────────────────────────────
 
@@ -71,6 +98,7 @@ export default function BriefingPage() {
   const [error,     setError]     = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [syncing,   setSyncing]   = useState(false);
+  const [nlvDelta,  setNlvDelta]  = useState<{ abs: number; pct: number } | null>(null);
 
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
@@ -81,7 +109,17 @@ export default function BriefingPage() {
         getSettings(), getPcsExposure(), getMarketIntel(), getSpyHedge(), getDpFloorsGex('SPY'),
         getPnl(),
       ]);
-      if (b.status   === 'fulfilled') setBriefing(b.value);
+      if (b.status   === 'fulfilled') {
+        setBriefing(b.value);
+        const nlvVal = b.value?.account?.net_liq;
+        if (nlvVal != null) {
+          const prior = getPriorNlv();
+          if (prior != null && prior !== 0) {
+            setNlvDelta({ abs: nlvVal - prior, pct: ((nlvVal - prior) / prior) * 100 });
+          }
+          saveNlvSnapshot(nlvVal);
+        }
+      }
       if (i.status   === 'fulfilled') setIbkr(i.value);
       if (a.status   === 'fulfilled') setAlerts(a.value?.alerts ?? []);
       if (p.status   === 'fulfilled') setPositions((p.value?.positions ?? []).map(augmentLeg));
@@ -161,6 +199,12 @@ export default function BriefingPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
           <StatRow stats={[
             { label: 'Net Liq',    value: fmt$(nlv),    color: 'var(--text)' },
+            ...(nlvDelta ? [{
+              label: 'NLV Δ (1d)',
+              value: `${fmt$(nlvDelta.abs)} (${fmtPct(nlvDelta.pct)})`,
+              color: nlvDelta.abs >= 0 ? 'var(--green)' : 'var(--red)',
+              mono: true,
+            }] : []),
             { label: 'Available',  value: fmt$(avail),  color: briefing?.account?.thresholds?.available_funds_ok === false ? 'var(--red)' : 'var(--muted)' },
             { label: 'Excess Liq', value: fmt$(excessLiq), color: briefing?.account?.thresholds?.excess_liq_ok === false ? 'var(--red)' : 'var(--muted)' },
             { label: 'Δ port',     value: totalDelta != null ? (totalDelta > 0 ? '+' : '') + Math.round(totalDelta) : '—', color: deltaColor, mono: true },

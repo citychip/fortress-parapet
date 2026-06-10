@@ -1,16 +1,18 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useSortable, SortTh } from '../components/Sortable';
 import Layout from '../components/Layout';
 import Card from '../components/Card';
 import { TabBar } from '../components/Tabs';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getCalendar, fetchEarnings, getQuantDataReports, getUniverse, getIvRank, getGex, getVolSkew, getVolAnalytics, type IvRankData } from '../lib/api';
+import { getCalendar, fetchEarnings, getQuantDataReports, getUniverse, getIvRank, getGex, getVolSkew, getVolAnalytics, getEarningsVolatility, type IvRankData } from '../lib/api';
 import { UniverseSection } from '../components/system/UniverseSection';
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine,
-  ResponsiveContainer, CartesianGrid, Legend,
-} from 'recharts';
+
+// Recharts (~688KB) is only needed for the Analytics tab — lazy-load it
+// so it's split into its own chunk and not part of the main bundle.
+const GexChart    = lazy(() => import('../components/AnalyticsCharts').then(m => ({ default: m.GexChart })));
+const VolSkewChart = lazy(() => import('../components/AnalyticsCharts').then(m => ({ default: m.VolSkewChart })));
+const VolSkewSvg  = lazy(() => import('../components/AnalyticsCharts').then(m => ({ default: m.VolSkewSvg })));
 
 export default function MarketPage() {
   const [tab, setTab]           = useState('analytics');
@@ -181,13 +183,13 @@ function AnalyticsTab({ universe }: { universe: string[] }) {
 
       {/* GEX & Skew view */}
       {view === 'gex' && (
-        <>
+        <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spinner size={24} /></div>}>
           {gexData && <GexChart data={gexData} ticker={ticker} />}
           {skewData && <VolSkewChart data={skewData} ticker={ticker} />}
           {!loading && !err && !gexData && !skewData && (
             <p style={{ color: 'var(--muted)', textAlign: 'center', padding: 60 }}>No GEX / skew data available.</p>
           )}
-        </>
+        </Suspense>
       )}
 
       {/* IV Ladder view */}
@@ -240,7 +242,9 @@ function AnalyticsTab({ universe }: { universe: string[] }) {
               )}
               {(skewPuts.length > 0 || skewCalls.length > 0) && (
                 <Card title={`${ticker} Vol Skew — ${volData.skew_expiry ?? ''}`}>
-                  <VolSkewSvg puts={skewPuts} calls={skewCalls} spot={volData.spot} />
+                  <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spinner size={24} /></div>}>
+                    <VolSkewSvg puts={skewPuts} calls={skewCalls} spot={volData.spot} />
+                  </Suspense>
                 </Card>
               )}
             </>
@@ -252,221 +256,6 @@ function AnalyticsTab({ universe }: { universe: string[] }) {
       )}
     </div>
   );
-}
-
-function GexChart({ data, ticker }: { data: any; ticker: string }) {
-  // data: {spot, total_gex, strikes: [{strike, net_gex, call_gex, put_gex}]}
-  const strikes: any[] = data.strikes ?? [];
-  if (!strikes.length) return (
-    <Card title={`${ticker} GEX`}>
-      <p style={{ color: 'var(--muted)', fontSize: 13 }}>No GEX data.</p>
-    </Card>
-  );
-
-  const spot = data.spot ?? 0;
-  const maxAbs = Math.max(...strikes.map(s => Math.abs(s.net_gex ?? 0)), 1);
-
-  // Key levels
-  const callWall = data.call_wall ?? strikes.reduce((a: any, s: any) => (s.call_gex ?? 0) > (a?.call_gex ?? 0) ? s : a, strikes[0]);
-  const putWall  = data.put_wall  ?? strikes.reduce((a: any, s: any) => (s.put_gex ?? 0) < (a?.put_gex ?? 0) ? s : a, strikes[0]);
-
-  return (
-    <Card title={`${ticker} Gamma Exposure — Spot $${spot.toFixed(0)}`}>
-      {(data.call_wall || data.put_wall || data.total_gex != null) && (
-        <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-          {data.total_gex != null && (
-            <KVChip label="Net GEX" value={fmtGex(data.total_gex)} color={data.total_gex >= 0 ? 'var(--green)' : 'var(--red)'} />
-          )}
-          {callWall?.strike && <KVChip label="Call Wall" value={`$${callWall.strike}`} color="var(--green)" />}
-          {putWall?.strike  && <KVChip label="Put Wall"  value={`$${putWall.strike}`}  color="var(--red)"   />}
-          {data.flip_level  && <KVChip label="Flip"      value={`$${data.flip_level}`} color="var(--muted)" />}
-        </div>
-      )}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-        {strikes.slice(-30).map((s: any, i: number) => {
-          const net = s.net_gex ?? 0;
-          const pct = (Math.abs(net) / maxAbs) * 100;
-          const isPos = net >= 0;
-          const isSpot = Math.abs((s.strike ?? 0) - spot) < (spot * 0.005);
-          return (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              background: isSpot ? 'rgba(99,102,241,0.06)' : undefined,
-              borderRadius: 3, padding: '1px 4px',
-            }}>
-              <span style={{ fontFamily: 'monospace', fontSize: 11, minWidth: 48, color: isSpot ? 'var(--accent)' : 'var(--muted)', fontWeight: isSpot ? 700 : 400 }}>
-                {s.strike}
-              </span>
-              <div style={{ flex: 1, height: 12, display: 'flex', alignItems: 'center' }}>
-                <div style={{
-                  width: `${pct}%`, height: 8, borderRadius: 2,
-                  background: isPos ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)',
-                  minWidth: pct > 0 ? 1 : 0,
-                }} />
-              </div>
-              <span style={{ fontFamily: 'monospace', fontSize: 10, color: isPos ? 'var(--green)' : 'var(--red)', minWidth: 60, textAlign: 'right' }}>
-                {fmtGex(net)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
-
-function VolSkewChart({ data, ticker }: { data: any; ticker: string }) {
-  // data: {spot_price, atm_iv (already %), skew_25d, expiry, strikes: [{strike, call_iv, put_iv, mid_iv}]}
-  const strikes: any[] = data.strikes ?? [];
-  const spot = data.spot_price ?? data.spot ?? 0;
-  const atmIv = data.atm_iv ?? null;
-  const skewSlope = data.skew_25d ?? null;
-
-  const validPts = strikes
-    .filter((s: any) => (s.mid_iv ?? s.call_iv ?? s.put_iv) != null)
-    .sort((a: any, b: any) => a.strike - b.strike)
-    .map((s: any) => ({
-      strike: s.strike,
-      callIv: s.call_iv ?? null,
-      putIv:  s.put_iv  ?? null,
-      midIv:  s.mid_iv  ?? (s.call_iv != null && s.put_iv != null ? (s.call_iv + s.put_iv) / 2 : null),
-    }));
-
-  if (!validPts.length) return (
-    <Card title={`${ticker} Vol Skew${data.expiry ? ` — ${data.expiry}` : ''}`}>
-      <p style={{ color: 'var(--muted)', fontSize: 13 }}>No skew data.</p>
-    </Card>
-  );
-
-  const hasCall = validPts.some((p: any) => p.callIv != null);
-  const hasPut  = validPts.some((p: any) => p.putIv  != null);
-  const hasMid  = validPts.some((p: any) => p.midIv  != null);
-
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 4, fontFamily: 'monospace' }}>${label}</div>
-        {payload.map((p: any) => (
-          <div key={p.name} style={{ color: p.color }}>{p.name}: {p.value?.toFixed(1)}%</div>
-        ))}
-      </div>
-    );
-  };
-
-  return (
-    <Card title={`${ticker} Vol Skew${data.expiry ? ` — ${data.expiry}` : ''}`}>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-        {atmIv != null && <KVChip label="ATM IV" value={`${atmIv.toFixed(1)}%`} color="var(--accent)" />}
-        {skewSlope != null && <KVChip label="25d Skew" value={`${skewSlope > 0 ? '+' : ''}${skewSlope.toFixed(1)}pp`} color={skewSlope > 0 ? 'var(--red)' : 'var(--muted)'} />}
-        {spot > 0 && <KVChip label="Spot" value={`$${spot.toFixed(0)}`} color="var(--muted)" />}
-      </div>
-      <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={validPts} margin={{ top: 8, right: 16, bottom: 8, left: 40 }}>
-          <CartesianGrid stroke="var(--border)" strokeOpacity={0.3} vertical={false} />
-          <XAxis
-            dataKey="strike"
-            tickFormatter={(v: number) => `$${v}`}
-            tick={{ fill: 'var(--muted)', fontSize: 10 }}
-            tickLine={false}
-            axisLine={{ stroke: 'var(--border)' }}
-          />
-          <YAxis
-            tickFormatter={(v: number) => `${v.toFixed(0)}%`}
-            tick={{ fill: 'var(--muted)', fontSize: 10 }}
-            tickLine={false}
-            axisLine={false}
-            width={38}
-          />
-          <Tooltip content={<CustomTooltip />} />
-          {spot > 0 && (
-            <ReferenceLine x={spot} stroke="var(--accent)" strokeDasharray="4 3" strokeOpacity={0.8} label={{ value: `$${spot.toFixed(0)}`, fill: 'var(--accent)', fontSize: 10, position: 'top' }} />
-          )}
-          {hasCall && <Line type="monotone" dataKey="callIv" name="Call IV" stroke="rgba(34,197,94,0.85)" strokeWidth={2} dot={false} />}
-          {hasPut  && <Line type="monotone" dataKey="putIv"  name="Put IV"  stroke="rgba(239,68,68,0.85)" strokeWidth={2} dot={false} />}
-          {hasMid  && <Line type="monotone" dataKey="midIv"  name="Mid IV"  stroke="#38bdf8"              strokeWidth={2} dot={false} />}
-        </LineChart>
-      </ResponsiveContainer>
-    </Card>
-  );
-}
-
-
-function VolSkewSvg({ puts, calls, spot }: { puts: any[]; calls: any[]; spot: number }) {
-  const all = [...puts, ...calls];
-  if (!all.length) return null;
-
-  // Merge puts + calls into unified strike array for Recharts
-  const strikeMap = new Map<number, { strike: number; putIv?: number; callIv?: number }>();
-  for (const r of puts.sort((a, b) => a.strike - b.strike)) {
-    strikeMap.set(r.strike, { strike: r.strike, putIv: r.iv });
-  }
-  for (const r of calls.sort((a, b) => a.strike - b.strike)) {
-    const existing = strikeMap.get(r.strike) ?? { strike: r.strike };
-    strikeMap.set(r.strike, { ...existing, callIv: r.iv });
-  }
-  const chartData = Array.from(strikeMap.values()).sort((a, b) => a.strike - b.strike);
-
-  const atmPut  = puts.length  ? [...puts].sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot))[0] : null;
-  const atmCall = calls.length ? [...calls].sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot))[0] : null;
-
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 4, fontFamily: 'monospace' }}>${label}</div>
-        {payload.map((p: any) => (
-          <div key={p.name} style={{ color: p.color }}>{p.name}: {p.value?.toFixed(1)}%</div>
-        ))}
-      </div>
-    );
-  };
-
-  return (
-    <>
-      <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
-        <span style={{ fontSize: 11, color: 'rgba(239,68,68,0.9)' }}>■ Put IV</span>
-        <span style={{ fontSize: 11, color: 'rgba(34,197,94,0.9)' }}>■ Call IV</span>
-        {atmPut  && <span style={{ fontSize: 11, color: 'var(--muted)' }}>ATM Put {atmPut.iv.toFixed(1)}%</span>}
-        {atmCall && <span style={{ fontSize: 11, color: 'var(--muted)' }}>ATM Call {atmCall.iv.toFixed(1)}%</span>}
-      </div>
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 8, left: 40 }}>
-          <CartesianGrid stroke="var(--border)" strokeOpacity={0.3} vertical={false} />
-          <XAxis
-            dataKey="strike"
-            tickFormatter={(v: number) => `$${v}`}
-            tick={{ fill: 'var(--muted)', fontSize: 10 }}
-            tickLine={false}
-            axisLine={{ stroke: 'var(--border)' }}
-          />
-          <YAxis
-            tickFormatter={(v: number) => `${v.toFixed(0)}%`}
-            tick={{ fill: 'var(--muted)', fontSize: 10 }}
-            tickLine={false}
-            axisLine={false}
-            width={38}
-          />
-          <Tooltip content={<CustomTooltip />} />
-          {spot > 0 && (
-            <ReferenceLine x={spot} stroke="var(--accent)" strokeDasharray="4 3" strokeOpacity={0.8} label={{ value: `$${spot.toFixed(0)}`, fill: 'var(--accent)', fontSize: 10, position: 'top' }} />
-          )}
-          <Line type="monotone" dataKey="putIv"  name="Put IV"  stroke="rgba(239,68,68,0.85)" strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="callIv" name="Call IV" stroke="rgba(34,197,94,0.85)" strokeWidth={2} dot={false} />
-        </LineChart>
-      </ResponsiveContainer>
-    </>
-  );
-}
-
-function fmtGex(v: number): string {
-  if (v == null) return '—';
-  const abs = Math.abs(v);
-  const sign = v >= 0 ? '+' : '-';
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(1)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)}M`;
-  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
-  return `${sign}${abs.toFixed(0)}`;
 }
 
 function KVChip({ label, value, color }: { label: string; value: string; color: string }) {
@@ -584,6 +373,16 @@ function QuantDataTab({ qd, universe }: { qd: any; universe: string[] }) {
 
 // ─── Earnings Table ───────────────────────────────────────────────────────────
 
+type EarnVolEntry = { implied: number | null; avg: number | null };
+
+function crushRisk(implied: number | null, avg: number | null): { label: string; color: string; bg: string } | null {
+  if (implied == null || avg == null) return null;
+  const diff = implied - avg;
+  if (diff >= 5) return { label: 'PRIME CRUSH', color: 'var(--red)', bg: 'rgba(239,68,68,0.1)' };
+  if (diff >= 2) return { label: 'ELEVATED', color: 'var(--yellow)', bg: 'rgba(245,158,11,0.1)' };
+  return { label: 'NORMAL', color: 'var(--green)', bg: 'rgba(34,197,94,0.1)' };
+}
+
 function EarningsTable({ cal }: { cal: any }) {
   const rawRows = Object.entries(cal?.tickers ?? {}).map(([ticker, e]: any) => ({
     ticker,
@@ -594,6 +393,28 @@ function EarningsTable({ cal }: { cal: any }) {
   }));
   const { sorted, key, dir, toggle } = useSortable(rawRows, 'days_to_earnings', 'asc');
 
+  // Background fetch of expected move / IV crush risk for upcoming earnings
+  const [earnVol, setEarnVol] = useState<Map<string, EarnVolEntry>>(new Map());
+  useEffect(() => {
+    const upcoming = rawRows.filter(r => r.status !== 'no_earnings' && r.status !== 'past' && r.ticker);
+    if (!upcoming.length) return;
+    let cancelled = false;
+    Promise.allSettled(upcoming.map(r => getEarningsVolatility(r.ticker).then(d => ({ ticker: r.ticker, d }))))
+      .then(results => {
+        if (cancelled) return;
+        const m = new Map<string, EarnVolEntry>();
+        for (const res of results) {
+          if (res.status === 'fulfilled') {
+            const { ticker, d } = res.value as any;
+            m.set(ticker, { implied: d?.implied_move_pct ?? null, avg: d?.avg_historical_pct ?? null });
+          }
+        }
+        setEarnVol(m);
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cal]);
+
   return (
     <div style={{ overflowX: 'auto' }}>
       <table>
@@ -602,12 +423,16 @@ function EarningsTable({ cal }: { cal: any }) {
           <SortTh label="Next Earnings" sortKey="next_earnings"    activeKey={key} dir={dir} onToggle={toggle} />
           <SortTh label="DTE"           sortKey="days_to_earnings" activeKey={key} dir={dir} onToggle={toggle} align="right" />
           <SortTh label="Status"        sortKey="status"           activeKey={key} dir={dir} onToggle={toggle} />
+          <th className="text-right">Expected Move</th>
+          <th>IV Crush Risk</th>
           <th>Notes</th>
         </tr></thead>
         <tbody>
           {sorted.map((e, i) => {
             const statusColor = e.status === 'blackout' ? 'var(--red)' : e.status === 'warning' ? 'var(--yellow)' : 'var(--green)';
             const statusBg   = e.status === 'blackout' ? 'rgba(239,68,68,0.1)' : e.status === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
+            const ev = earnVol.get(e.ticker);
+            const risk = ev ? crushRisk(ev.implied, ev.avg) : null;
             return (
               <tr key={i}>
                 <td style={{ fontWeight: 600 }}>{e.ticker}</td>
@@ -619,6 +444,25 @@ function EarningsTable({ cal }: { cal: any }) {
                   {e.status && (
                     <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: statusBg, color: statusColor, fontWeight: 600, textTransform: 'uppercase' }}>
                       {e.status}
+                    </span>
+                  )}
+                </td>
+                <td className="text-right mono">
+                  {ev?.implied != null ? (
+                    <>
+                      <span style={{ color: 'var(--accent)' }}>±{ev.implied.toFixed(1)}%</span>
+                      {ev.avg != null && (
+                        <span style={{ color: 'var(--muted)', marginLeft: 6, fontSize: 11 }}>avg ±{ev.avg.toFixed(1)}%</span>
+                      )}
+                    </>
+                  ) : (e.status === 'no_earnings' || e.status === 'past') ? '—' : (
+                    <span style={{ color: 'var(--muted)', fontSize: 11 }}>…</span>
+                  )}
+                </td>
+                <td>
+                  {risk && (
+                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: risk.bg, color: risk.color, fontWeight: 600, textTransform: 'uppercase' }}>
+                      {risk.label}
                     </span>
                   )}
                 </td>
@@ -778,88 +622,4 @@ function IvRankSection({ universe }: { universe: string[] }) {
             <thead><tr>
               <th>Ticker</th>
               <th className="text-right" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')}>
-                IV Rank {sortDir === 'desc' ? '▼' : '▲'}
-              </th>
-              <th className="text-right">Current IV</th>
-              <th className="text-right">52w High</th>
-              <th className="text-right">52w Low</th>
-              <th className="text-right">Call IV</th>
-              <th className="text-right">Put IV</th>
-            </tr></thead>
-            <tbody>
-              {sortedUniverse.map(ticker => {
-                const row = rows[ticker];
-                if (row?.status === 'loading') {
-                  const c = loadIvrCache(ticker);
-                  if (!c) return (
-                    <tr key={ticker}>
-                      <td style={{ fontWeight: 600 }}>{ticker}</td>
-                      <td colSpan={6} style={{ color: 'var(--muted)', fontSize: 12 }}>loading…</td>
-                    </tr>
-                  );
-                }
-                if (row?.status === 'error' && !merged[ticker]) {
-                  return (
-                    <tr key={ticker}>
-                      <td style={{ fontWeight: 600 }}>{ticker}</td>
-                      <td colSpan={6} style={{ color: 'var(--red)', fontSize: 12 }}>{row.error}</td>
-                    </tr>
-                  );
-                }
-                const m = merged[ticker];
-                if (!m) return null;
-                const d = m.data;
-                const ivr = d.iv_rank;
-                const ivrColor = ivr == null ? 'var(--muted)'
-                  : ivr >= 50 ? 'var(--green)' : ivr >= 25 ? 'var(--yellow)' : 'var(--muted)';
-                const bias = d.call_iv != null && d.put_iv != null
-                  ? d.call_iv > d.put_iv ? '↑ call' : d.put_iv > d.call_iv ? '↓ put' : '='
-                  : null;
-                const biasColor = bias === '↑ call' ? 'var(--green)' : bias === '↓ put' ? 'var(--red)' : 'var(--muted)';
-                return (
-                  <tr key={ticker} style={{ opacity: m.fromCache ? 0.75 : 1 }}>
-                    <td style={{ fontWeight: 600 }}>
-                      {ticker}
-                      {m.fromCache && m.cacheLabel && (
-                        <span style={{ marginLeft: 6, fontSize: 9, color: 'var(--muted)', fontWeight: 400 }}>
-                          {m.cacheLabel}
-                        </span>
-                      )}
-                    </td>
-                    <td className="text-right mono" style={{ color: ivrColor, fontWeight: 600 }}>
-                      {ivr != null ? ivr.toFixed(1) : '—'}
-                      {ivr != null && ivr >= 25 && <span style={{ marginLeft: 4, fontSize: 10 }}>✓</span>}
-                    </td>
-                    <td className="text-right mono">{d.current_iv != null ? d.current_iv.toFixed(1) + '%' : '—'}</td>
-                    <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_high != null ? d.iv_52w_high.toFixed(1) + '%' : '—'}</td>
-                    <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_low != null ? d.iv_52w_low.toFixed(1) + '%' : '—'}</td>
-                    <td className="text-right mono" style={{ fontSize: 12, color: 'var(--muted)' }}>{d.call_iv != null ? d.call_iv.toFixed(1) + '%' : '—'}</td>
-                    <td className="text-right mono" style={{ fontSize: 12, color: biasColor }}>{d.put_iv != null ? d.put_iv.toFixed(1) + '%' : '—'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 10 }}>
-            IV Rank ≥ 25 required for new entries (✓). ≥ 50 = prime entry zone.
-            {anyCache && ' · Faded rows show last cached close values.'}
-          </p>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-// ─── KV chip ──────────────────────────────────────────────────────────────────
-
-function KV({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 10, padding: '14px 20px', minWidth: 120,
-    }}>
-      <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: color ?? 'var(--text)', fontFamily: 'monospace' }}>{value}</div>
-    </div>
-  );
-}
+                IV Rank {sortDir 

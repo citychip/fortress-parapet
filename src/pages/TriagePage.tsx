@@ -19,6 +19,9 @@ export default function TriagePage() {
   const [loading, setLoading]  = useState(true);
   const [error, setError]      = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(() => {
+    try { return localStorage.getItem('triage_auto_refresh') !== 'off'; } catch { return true; }
+  });
 
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
@@ -48,11 +51,30 @@ export default function TriagePage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Refresh every 5 minutes
+  // Auto-refresh every 60s while page is visible
   useEffect(() => {
-    const id = setInterval(() => load(true), 5 * 60_000);
+    if (!autoRefresh) return;
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') load(true);
+    }, 60_000);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, autoRefresh]);
+
+  // Refresh immediately when tab becomes visible again (if stale)
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const onVisible = () => { if (document.visibilityState === 'visible') load(true); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [load, autoRefresh]);
+
+  const toggleAutoRefresh = () => {
+    setAutoRefresh(prev => {
+      const next = !prev;
+      try { localStorage.setItem('triage_auto_refresh', next ? 'on' : 'off'); } catch {}
+      return next;
+    });
+  };
 
   const actCount = countActSignals(stopData);
 
@@ -64,7 +86,17 @@ export default function TriagePage() {
   };
 
   return (
-    <Layout title="Triage" onRefresh={load} loading={loading} lastUpdated={updatedAt}>
+    <Layout title="Triage" onRefresh={load} loading={loading} lastUpdated={updatedAt}
+      action={
+        <button
+          onClick={toggleAutoRefresh}
+          title={autoRefresh ? 'Auto-refresh on (60s) — click to pause' : 'Auto-refresh paused — click to enable'}
+          style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', color: autoRefresh ? 'var(--green)' : 'var(--muted)', fontSize: 12, padding: '5px 12px' }}
+        >
+          {autoRefresh ? '⟳ Auto 60s' : '⏸ Paused'}
+        </button>
+      }
+    >
       {loading && !rollData && !stopData && (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><Spinner size={32} /></div>
       )}
