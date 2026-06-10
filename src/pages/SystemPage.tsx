@@ -423,20 +423,82 @@ function JournalTab() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {entries.map((e: any, i: number) => {
               const ts = e.timestamp ?? e.created_at ?? e.date ?? null;
-              const text = e.note ?? e.entry ?? e.text ?? e.content ?? JSON.stringify(e);
+              const rawText = e.note ?? e.entry ?? e.text ?? e.content ?? JSON.stringify(e);
+
+              // Try to detect a serialized trade record stored as a JSON string
+              let tradeRecord: any = null;
+              if (typeof rawText === 'string' && rawText.trimStart().startsWith('{')) {
+                try {
+                  const parsed = JSON.parse(rawText);
+                  if (parsed?.ticker || parsed?.action || parsed?.description) tradeRecord = parsed;
+                } catch {}
+              }
+
+              const actionColor = (a: string) => {
+                if (!a) return 'var(--muted)';
+                if (a === 'OPEN') return 'var(--green)';
+                if (a === 'CLOSE' || a === 'SELL') return 'var(--red)';
+                if (a === 'ROLL') return 'var(--yellow)';
+                return 'var(--accent)';
+              };
+
               return (
                 <div key={i} style={{
                   padding: '12px 14px',
                   borderRadius: 8,
                   background: i === 0 ? 'var(--surface2)' : 'var(--surface)',
-                  border: '1px solid var(--border)',
+                  border: `1px solid ${tradeRecord ? 'var(--border2)' : 'var(--border)'}`,
                 }}>
                   {ts && (
                     <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6, fontFamily: 'monospace' }}>
                       {new Date(ts).toLocaleString()}
                     </div>
                   )}
-                  <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{text}</div>
+                  {tradeRecord ? (
+                    /* Structured trade record display */
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {tradeRecord.action && (
+                          <span style={{
+                            fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+                            color: actionColor(tradeRecord.action),
+                            background: `${actionColor(tradeRecord.action)}1a`,
+                            fontFamily: 'monospace',
+                          }}>{tradeRecord.action}</span>
+                        )}
+                        {tradeRecord.ticker && (
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>{tradeRecord.ticker}</span>
+                        )}
+                        {tradeRecord.strategy && (
+                          <span style={{ fontSize: 12, color: 'var(--accent)', fontFamily: 'monospace' }}>{tradeRecord.strategy}</span>
+                        )}
+                        {tradeRecord.description && tradeRecord.description !== `${tradeRecord.action} ${tradeRecord.ticker}` && (
+                          <span style={{ fontSize: 12, color: 'var(--muted)' }}>{tradeRecord.description}</span>
+                        )}
+                      </div>
+                      {(tradeRecord.realized_pnl != null || tradeRecord.debit_credit != null) && (
+                        <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
+                          {tradeRecord.realized_pnl != null && (
+                            <span style={{ color: tradeRecord.realized_pnl >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'monospace', fontWeight: 600 }}>
+                              P&L {tradeRecord.realized_pnl >= 0 ? '+' : ''}{tradeRecord.realized_pnl.toFixed(2)}
+                            </span>
+                          )}
+                          {tradeRecord.debit_credit != null && (
+                            <span style={{ color: 'var(--muted)', fontFamily: 'monospace' }}>
+                              {tradeRecord.debit_credit >= 0 ? '+' : ''}{tradeRecord.debit_credit.toFixed(2)} credit
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {tradeRecord.notes && (
+                        <div style={{ fontSize: 13, color: 'var(--fg)', lineHeight: 1.5, paddingTop: 4, borderTop: '1px solid var(--border)' }}>
+                          {tradeRecord.notes}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{rawText}</div>
+                  )}
                 </div>
               );
             })}
