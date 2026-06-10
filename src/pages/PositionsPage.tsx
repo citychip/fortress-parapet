@@ -5,34 +5,52 @@ import Card from '../components/Card';
 import { TabBar } from '../components/Tabs';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
+import { PositionsCardList } from '../components/positions/PositionCards';
+import { augmentLeg } from '../lib/positions';
+import { useSettings, useThresholds } from '../lib/useSettings';
 import {
-  getPositions, getSectorExposure, getPortfolioBeta,
-  getForwardPnl, getPnlHistory, getTradeReport, getPositionLimits,
+  getPositions, getSectorExposure, getPortfolioBeta, getCandidates,
+  getForwardPnl, getPnl, getPnlHistory,
   fmt$, clsN,
-  type PositionData, type ForwardPnlData,
+  type PositionData, type ForwardPnlData, type PnLData, type BetaData,
 } from '../lib/api';
 
+// Sprint 13 (#85): 6 tabs → 5. "Trade Report" removed (stop-loss → Triage,
+// entry candidates → Candidates, exit candidates → Triage). "Limits" merged
+// into "Risk" (was Forward P&L — same selector, same stats, one tab).
+// New "Overview" tab shows the grouped strategy cards (shared with Briefing).
+
 export default function PositionsPage() {
-  const [tab, setTab]             = useState('pnl');
+  const [tab, setTab]             = useState('overview');
   const [posLegs, setPosLegs]     = useState<PositionData[]>([]);
   const [sector, setSector]       = useState<any>(null);
-  const [beta, setBeta]           = useState<any>(null);
+  const [beta, setBeta]           = useState<BetaData | null>(null);
+  const [ivrMap, setIvrMap]       = useState<Map<string, number | null>>(new Map());
+  const [ivMap, setIvMap]         = useState<Map<string, number | null>>(new Map());
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const settingsCfg = useSettings();
 
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
     setError(null);
     try {
-      const results = await Promise.allSettled([
-        getPositions(), getSectorExposure(), getPortfolioBeta(),
+      const [p, s, b, c] = await Promise.allSettled([
+        getPositions(), getSectorExposure(), getPortfolioBeta(), getCandidates(),
       ]);
-      if (results[0].status === 'fulfilled') {
-        setPosLegs((results[0].value?.positions ?? []).map(augmentLeg));
+      if (p.status === 'fulfilled') setPosLegs((p.value?.positions ?? []).map(augmentLeg));
+      if (s.status === 'fulfilled') setSector(s.value);
+      if (b.status === 'fulfilled') setBeta(b.value);
+      if (c.status === 'fulfilled') {
+        const m  = new Map<string, number | null>();
+        const iv = new Map<string, number | null>();
+        for (const row of (c.value?.rows ?? [])) {
+          m.set(row.ticker,  row.ivr        ?? null);
+          iv.set(row.ticker, row.current_iv ?? null);
+        }
+        setIvrMap(m); setIvMap(iv);
       }
-      if (results[1].status === 'fulfilled') setSector(results[1].value);
-      if (results[2].status === 'fulfilled') setBeta(results[2].value);
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
       setError(String(e));
@@ -49,19 +67,19 @@ export default function PositionsPage() {
   }, [load]);
 
   const TABS = [
-    { key: 'pnl',        label: 'P&L'          },
-    { key: 'exposure',   label: 'Exposure'      },
-    { key: 'forwardpnl', label: 'Forward P&L'   },
-    { key: 'limits',     label: 'Limits'        },
-    { key: 'legs',       label: 'Legs'          },
-    { key: 'report',     label: 'Trade Report'  },
+    { key: 'overview', label: 'Overview' },
+    { key: 'pnl',      label: 'P&L'      },
+    { key: 'exposure', label: 'Exposure' },
+    { key: 'risk',     label: 'Risk'     },
+    { key: 'legs',     label: 'Legs'     },
   ];
 
-  // Tab keyboard shortcuts: 1-6
+  // Tab keyboard shortcuts: 1-5 (modifier guard #91 — don't hijack Ctrl/Cmd+N)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
-      if (['INPUT','SELECT','TEXTAREA'].includes(target.tagName)) return;
+      if (['INPUT','SELECT','TEXTAREA'].includes(target.tagName) || target.isContentEditable) return;
       const n = parseInt(e.key, 10);
       if (n >= 1 && n <= TABS.length) setTab(TABS[n - 1].key);
     };
@@ -80,21 +98,22 @@ export default function PositionsPage() {
 
       <TabBar tabs={TABS} active={tab} onChange={setTab} />
 
-      {tab === 'pnl' && <PnlTab legs={posLegs} />}
-      {tab === 'legs' && <LegsTab legs={posLegs} />}
-
-      {tab === 'exposure' && (
-        <ExposureTab sector={sector} beta={beta} />
+      {tab === 'overview' && (
+        posLegs.length
+          ? <PositionsCardList positions={posLegs} ivrMap={ivrMap} ivMap={ivMap} settings={settingsCfg} />
+          : !loading && <p style={{ color: 'var(--muted)', textAlign: 'center', padding: 60 }}>No open positions.</p>
       )}
-
-      {tab === 'forwardpnl' && <ForwardPnlTab positions={posLegs} />}
-      {tab === 'limits'     && <PositionLimitsTab positions={posLegs} />}
-      {tab === 'report'     && <TradeReportTab />}
+      {tab === 'pnl'      && <PnlTab legs={posLegs} />}
+      {tab === 'exposure' && <ExposureTab sector={sector} beta={beta} />}
+      {tab === 'risk'     && <RiskTab positions={posLegs} />}
+      {tab === 'legs'     && <LegsTab legs={posLegs} />}
     </Layout>
   );
 }
 
 // ── P&L Tab ───────────────────────────────────────────────────────────────────
+// #82: backend /api/pnl is the source of truth; client-side leg math is kept
+// only as a fallback when the endpoint fails.
 
 function computeLegPnl(leg: any): number {
   const qty      = Number(leg.qty ?? 0);
@@ -105,31 +124,42 @@ function computeLegPnl(leg: any): number {
 }
 
 function PnlTab({ legs }: { legs: any[] }) {
+  const [backend, setBackend] = useState<PnLData | null>(null);
+  const [backendFailed, setBackendFailed] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
+
   useEffect(() => {
-    getPnlHistory()
-      .then(d => setHistory(d?.rows ?? []))
-      .catch(() => {});
+    getPnl().then(setBackend).catch(() => setBackendFailed(true));
+    getPnlHistory().then(d => setHistory(d?.rows ?? [])).catch(() => {});
   }, []);
 
-  const byTicker = new Map<string, { pnl: number; costBasis: number; legs: number }>();
-  let totalPnl = 0, winners = 0, losers = 0;
+  // Client fallback (cost-basis math from raw legs)
+  const clientByTicker = new Map<string, { pnl: number; costBasis: number }>();
+  let clientTotal = 0;
   for (const leg of legs) {
     const pnl = computeLegPnl(leg);
-    const qty = Number(leg.qty ?? 0);
-    const avgCost = Number(leg.avg_cost ?? 0);
-    const costBasis = avgCost * Math.abs(qty);
-    totalPnl += pnl;
-    if (pnl >= 0) winners++; else losers++;
+    const costBasis = Number(leg.avg_cost ?? 0) * Math.abs(Number(leg.qty ?? 0));
+    clientTotal += pnl;
     const t = leg.ticker ?? '?';
-    const existing = byTicker.get(t) ?? { pnl: 0, costBasis: 0, legs: 0 };
-    byTicker.set(t, { pnl: existing.pnl + pnl, costBasis: existing.costBasis + costBasis, legs: existing.legs + 1 });
+    const e = clientByTicker.get(t) ?? { pnl: 0, costBasis: 0 };
+    clientByTicker.set(t, { pnl: e.pnl + pnl, costBasis: e.costBasis + costBasis });
   }
+  const totalCost = [...clientByTicker.values()].reduce((s, v) => s + v.costBasis, 0);
 
-  const totalCost = [...byTicker.values()].reduce((s, v) => s + v.costBasis, 0);
+  // Prefer backend numbers when available
+  const backendRows = (backend?.by_ticker ?? []).filter(r => r.pnl != null);
+  const useBackend  = backendRows.length > 0;
+  const tickerRows  = useBackend
+    ? backendRows.map(r => ({ ticker: r.ticker, pnl: r.pnl as number }))
+    : [...clientByTicker.entries()].map(([ticker, v]) => ({ ticker, pnl: v.pnl }));
+  tickerRows.sort((a, b) => b.pnl - a.pnl);
+
+  const totalPnl  = backend?.summary?.unrealized_pnl ?? clientTotal;
+  const realized  = backend?.summary?.realized_pnl ?? null;
+  const winners   = tickerRows.filter(r => r.pnl >= 0).length;
+  const losers    = tickerRows.length - winners;
   const returnPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
-  const tickerRows = [...byTicker.entries()].map(([ticker, v]) => ({ ticker, ...v })).sort((a, b) => b.pnl - a.pnl);
-  const maxAbs = Math.max(...tickerRows.map(r => Math.abs(r.pnl)), 1);
+  const maxAbs    = Math.max(...tickerRows.map(r => Math.abs(r.pnl)), 1);
   const best  = tickerRows[0];
   const worst = tickerRows[tickerRows.length - 1];
 
@@ -137,7 +167,8 @@ function PnlTab({ legs }: { legs: any[] }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {[
-          { label: 'Total Unrealised', value: fmt$(totalPnl),    color: clsN(totalPnl), big: true  },
+          { label: 'Unrealised P&L',   value: fmt$(totalPnl),    color: clsN(totalPnl), big: true  },
+          ...(realized != null ? [{ label: 'Realised', value: fmt$(realized), color: clsN(realized), big: false }] : []),
           { label: 'Return on Cost',   value: `${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(1)}%`, color: clsN(returnPct), big: false },
           { label: 'Winners / Losers', value: `${winners} / ${losers}`, color: '', big: false },
           { label: 'Total Legs',       value: String(legs.length), color: '', big: false },
@@ -148,6 +179,10 @@ function PnlTab({ legs }: { legs: any[] }) {
           </div>
         ))}
       </div>
+
+      {backendFailed && (
+        <p style={{ fontSize: 11, color: 'var(--yellow)' }}>⚠ /api/pnl unavailable — showing client-side estimate from legs.</p>
+      )}
 
       {best && worst && best.ticker !== worst.ticker && (
         <div style={{ display: 'flex', gap: 12 }}>
@@ -164,7 +199,7 @@ function PnlTab({ legs }: { legs: any[] }) {
         </div>
       )}
 
-      <Card title="Unrealised P&L by Ticker">
+      <Card title={`Unrealised P&L by Ticker${useBackend ? '' : ' (client estimate)'}`}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {tickerRows.map(row => {
             const barPct = (Math.abs(row.pnl) / maxAbs) * 100;
@@ -253,14 +288,14 @@ const SECTOR_COLORS = [
   'rgba(251,146,60,0.7)',   // orange
 ];
 
-function ExposureTab({ sector, beta }: { sector: any; beta: any }) {
+function ExposureTab({ sector, beta }: { sector: any; beta: BetaData | null }) {
+  const th = useThresholds(); // #80: β-wtd target from settings, not a constant
   const sectors: any[] = sector
     ? (Array.isArray(sector) ? sector : sector?.sectors ?? Object.entries(sector).map(([k, v]: any) => ({ sector: k, ...(typeof v === 'object' ? v : { pct: v }) })))
     : [];
 
   const maxPct = Math.max(...sectors.map((s: any) => Math.abs(s.pct ?? 0)), 1);
 
-  // Beta component rows
   const betas: any[] = beta?.component_betas
     ? [...beta.component_betas].sort((a: any, b: any) => Math.abs(b.delta_contribution ?? 0) - Math.abs(a.delta_contribution ?? 0))
     : [];
@@ -268,10 +303,7 @@ function ExposureTab({ sector, beta }: { sector: any; beta: any }) {
 
   const bwd = beta?.beta_weighted_delta ?? null;
   const bwdColor = bwd == null ? 'var(--muted)' : bwd > 0 ? 'var(--green)' : 'var(--red)';
-  // Target: 320 β-weighted delta (matches "β-wtd target" on System > Strategy).
-  // Note: this is in the same beta-weighted-delta units as `bwd`, distinct from the
-  // 0.25-0.35 per-position option-delta entry target shown elsewhere.
-  const deltaTarget = 320;
+  const deltaTarget = th.betaTarget;
   const deltaOff = bwd != null ? (bwd - deltaTarget).toFixed(1) : null;
 
   return (
@@ -292,9 +324,7 @@ function ExposureTab({ sector, beta }: { sector: any; beta: any }) {
           <div style={{ flex: 1, minWidth: 140, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 20px' }}>
             <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>Delta vs Target</div>
             <div style={{ height: 8, background: 'var(--surface2)', borderRadius: 4, marginTop: 8, marginBottom: 6, position: 'relative' }}>
-              {/* Center line at target (0.35) */}
               <div style={{ position: 'absolute', left: `${(deltaTarget / (Math.max(Math.abs(bwd) * 1.5, 1))) * 50 + 50}%`, top: -4, bottom: -4, width: 2, background: 'var(--accent)', borderRadius: 1, opacity: 0.6 }} />
-              {/* Bar from 0 to bwd */}
               <div style={{
                 position: 'absolute',
                 left: bwd >= 0 ? '50%' : `${50 + (bwd / (Math.max(Math.abs(bwd) * 1.5, 1))) * 50}%`,
@@ -310,7 +340,6 @@ function ExposureTab({ sector, beta }: { sector: any; beta: any }) {
         {sectors.length > 0 && (
           <div style={{ flex: 2, minWidth: 240, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 20px' }}>
             <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 10 }}>Sector Mix</div>
-            {/* Stacked horizontal bar */}
             <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', gap: 1, marginBottom: 10 }}>
               {sectors.filter((s: any) => s.pct != null && s.pct > 0).map((s: any, i: number) => (
                 <div key={i} style={{ flex: s.pct, background: SECTOR_COLORS[i % SECTOR_COLORS.length], minWidth: 2 }} title={`${s.sector ?? s.name}: ${s.pct?.toFixed(1)}%`} />
@@ -462,22 +491,7 @@ function LegsTab({ legs }: { legs: any[] }) {
   );
 }
 
-// ── Forward P&L Tab ───────────────────────────────────────────────────────────
-
-function parseLocalSymbol(localSymbol: string | null | undefined): { expiry: string | null; right: string | null; strike: number | null } {
-  const empty = { expiry: null, right: null, strike: null };
-  if (!localSymbol) return empty;
-  const m = localSymbol.match(/\[\S+\s+(\d{6})([CP])(\d{8})/);
-  if (!m) return empty;
-  const [, yymmdd, right, strikeStr] = m;
-  return { expiry: `20${yymmdd.slice(0,2)}-${yymmdd.slice(2,4)}-${yymmdd.slice(4,6)}`, right, strike: parseInt(strikeStr, 10) / 1000 };
-}
-
-function augmentLeg(p: any): any {
-  if (p.expiry && p.strike && p.right) return p;
-  const parsed = parseLocalSymbol(p.local_symbol);
-  return { ...p, expiry: p.expiry ?? parsed.expiry, strike: (p.strike && p.strike !== 0) ? p.strike : (parsed.strike ?? p.strike), right: p.right ?? parsed.right };
-}
+// ── Risk Tab (#85: Forward P&L + Limits merged) ───────────────────────────────
 
 function interpolatePnl(curve: ForwardPnlData['curve'], price: number): number | null {
   for (let i = 0; i < curve.length - 1; i++) {
@@ -489,7 +503,7 @@ function interpolatePnl(curve: ForwardPnlData['curve'], price: number): number |
   return null;
 }
 
-function ForwardPnlTab({ positions }: { positions: any[] }) {
+function RiskTab({ positions }: { positions: any[] }) {
   const tickers = [...new Set(positions.map((p: any) => p.ticker as string).filter(Boolean))].sort();
   const [ticker, setTicker]         = useState(tickers[0] ?? '');
   const [targetDate, setTargetDate] = useState('');
@@ -559,7 +573,6 @@ function ForwardPnlTab({ positions }: { positions: any[] }) {
                 { label: 'Max Loss',    value: fmtStat(data.max_loss),    cls: 'text-red'   },
                 { label: 'Net Premium', value: fmtStat(data.net_premium), cls: clsN(data.net_premium) },
                 { label: `P&L @ Spot (${fmt$(data.spot, 0)})`, value: spotPnl != null ? fmtStat(spotPnl) : '—', cls: clsN(spotPnl) },
-                ...data.breakevens.map((be, i) => ({ label: `Breakeven${data.breakevens.length > 1 ? ` ${i + 1}` : ''}`, value: `$${be.toFixed(2)}`, cls: '' })),
               ];
             })().map((s, i) => (
               <div key={i} style={{ flex: 1, minWidth: 120, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px' }}>
@@ -568,6 +581,24 @@ function ForwardPnlTab({ positions }: { positions: any[] }) {
               </div>
             ))}
           </div>
+
+          {/* Breakevens with % from spot (from former Limits tab) */}
+          {data.breakevens.length > 0 && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {data.breakevens.map((be: number, i: number) => (
+                <div key={i} style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 8, padding: '10px 18px' }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Breakeven {data.breakevens.length > 1 ? i + 1 : ''}</div>
+                  <div className="mono" style={{ fontSize: 16, fontWeight: 700 }}>${be.toFixed(2)}</div>
+                  {data.spot > 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
+                      {((be - data.spot) / data.spot * 100).toFixed(1)}% from spot
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           <Card title={`${data.ticker} forward P&L — expires ${data.target_date}${ivAdj < 1 ? ' (IV crush ×0.6)' : ''}`}>
             <ForwardPnlChart data={data} spotPnl={spotPnl} />
           </Card>
@@ -575,7 +606,7 @@ function ForwardPnlTab({ positions }: { positions: any[] }) {
       )}
 
       {!data && !loading && !err && (
-        <p style={{ color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: 40 }}>Select a ticker and date to load the forward P&L curve.</p>
+        <p style={{ color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: 40 }}>Select a ticker and date to load the risk profile.</p>
       )}
     </div>
   );
@@ -640,264 +671,5 @@ function AlertBadge({ state }: { state?: string }) {
     <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: bg, color, fontWeight: 600, textTransform: 'uppercase' }}>
       {state ?? '—'}
     </span>
-  );
-}
-
-// ── Position Limits Tab ───────────────────────────────────────────────────────
-
-function PositionLimitsTab({ positions }: { positions: any[] }) {
-  const tickers = [...new Set(positions.map((p: any) => p.ticker as string).filter(Boolean))].sort();
-  const [ticker, setTicker] = useState(tickers[0] ?? '');
-  const [data, setData]     = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr]       = useState<string | null>(null);
-
-  const load = useCallback(async (t: string) => {
-    if (!t) return;
-    setLoading(true); setErr(null); setData(null);
-    const legs = positions.filter((p: any) => p.ticker === t);
-    try {
-      const d = await getPositionLimits(t, legs);
-      setData(d);
-    } catch (e: any) {
-      setErr(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [positions]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => { if (ticker) load(ticker); }, [ticker]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Ticker selector */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        {tickers.map(t => (
-          <button key={t} onClick={() => setTicker(t)} style={{
-            fontSize: 12, padding: '5px 12px', borderRadius: 6, cursor: 'pointer',
-            background: ticker === t ? 'var(--accent)' : 'var(--surface2)',
-            color: ticker === t ? '#fff' : 'var(--muted)',
-            border: ticker === t ? 'none' : '1px solid var(--border2)',
-            fontWeight: ticker === t ? 600 : 400,
-          }}>{t}</button>
-        ))}
-        {loading && <Spinner size={14} />}
-      </div>
-
-      {err && <ErrorBanner msg={err} onRetry={() => load(ticker)} />}
-
-      {data && (
-        <>
-          {/* Key metrics */}
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {[
-              { label: 'Spot',        value: data.spot       != null ? `$${data.spot.toFixed(2)}` : '—', color: 'var(--muted)' },
-              { label: 'Max Profit',  value: data.max_profit != null ? fmt$(data.max_profit, Math.abs(data.max_profit) < 100 ? 2 : 0) : '—', color: clsN(data.max_profit) },
-              { label: 'Max Loss',    value: data.max_loss   != null ? fmt$(data.max_loss,   Math.abs(data.max_loss)   < 100 ? 2 : 0) : '—', color: clsN(data.max_loss) },
-              { label: 'Net Premium', value: data.net_premium != null ? fmt$(data.net_premium, Math.abs(data.net_premium) < 100 ? 2 : 0) : '—', color: clsN(data.net_premium) },
-            ].map((s, i) => (
-              <div key={i} style={{ flex: 1, minWidth: 130, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px' }}>
-                <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 8 }}>{s.label}</div>
-                <div className={`mono ${s.color}`} style={{ fontSize: 20, fontWeight: 700 }}>{s.value}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Breakevens */}
-          <Card title="Breakeven Prices">
-            {!data.breakevens?.length ? (
-              <p style={{ color: 'var(--muted)', fontSize: 13 }}>No breakeven data — position may be a long-only holding or data unavailable.</p>
-            ) : (
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                {data.breakevens.map((be: number, i: number) => (
-                  <div key={i} style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 8, padding: '12px 20px' }}>
-                    <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Breakeven {data.breakevens.length > 1 ? i + 1 : ''}</div>
-                    <div className="mono" style={{ fontSize: 18, fontWeight: 700 }}>${be.toFixed(2)}</div>
-                    {data.spot && (
-                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
-                        {((be - data.spot) / data.spot * 100).toFixed(1)}% from spot
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        </>
-      )}
-
-      {!data && !loading && !err && tickers.length === 0 && (
-        <p style={{ color: 'var(--muted)', textAlign: 'center', padding: 40 }}>No open positions.</p>
-      )}
-    </div>
-  );
-}
-
-// ── Trade Report Tab ──────────────────────────────────────────────────────────
-
-function TradeReportTab() {
-  const [data, setData]     = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr]       = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true); setErr(null);
-    try {
-      const d = await getTradeReport();
-      setData(d);
-    } catch (e: any) {
-      setErr(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  if (loading) return <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><Spinner size={28} /></div>;
-  if (err) return <ErrorBanner msg={err} onRetry={load} />;
-  if (!data) return null;
-
-  const stopAlerts:   any[] = data.stop_loss_alerts   ?? [];
-  const entryCands:   any[] = data.entry_candidates   ?? [];
-  const exitCands:    any[] = data.exit_candidates    ?? [];
-  const macro               = data.macro ?? {};
-  const summary             = data.summary ?? {};
-  const asOf                = data.as_of ? new Date(data.as_of).toLocaleString() : null;
-
-  const verdictColor  = (v: string) => v === 'ACT' ? 'var(--red)' : v === 'WATCH' ? 'var(--yellow)' : 'var(--green)';
-  const verdictBg     = (v: string) => v === 'ACT' ? 'rgba(239,68,68,0.1)' : v === 'WATCH' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
-  const actionColor   = (a: string) => a === 'NEW_ENTRY' ? 'var(--accent)' : 'var(--green)';
-  const ivrColor      = (ivr: number | null) => ivr == null ? 'var(--muted)' : ivr >= 50 ? 'var(--green)' : ivr >= 25 ? 'var(--yellow)' : 'var(--muted)';
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Header bar */}
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        {macro.regime && (
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 16px' }}>
-            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 4 }}>Regime</div>
-            <div style={{ fontSize: 14, fontWeight: 700, textTransform: 'uppercase', fontFamily: 'monospace', color: macro.regime === 'bullish' ? 'var(--green)' : macro.regime === 'bearish' ? 'var(--red)' : 'var(--yellow)' }}>{macro.regime}</div>
-          </div>
-        )}
-        {[
-          { label: 'Stop Alerts', value: summary.stop_loss_alerts_count ?? stopAlerts.length, color: stopAlerts.some((s:any) => s.verdict === 'ACT') ? 'var(--red)' : 'var(--muted)' },
-          { label: 'Entry Cands', value: summary.entry_candidates_count ?? entryCands.length, color: 'var(--muted)' },
-          { label: 'Exit Cands',  value: summary.exit_candidates_count  ?? exitCands.length,  color: exitCands.length ? 'var(--green)' : 'var(--muted)' },
-        ].map((s, i) => (
-          <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 16px' }}>
-            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 4 }}>{s.label}</div>
-            <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'monospace', color: s.color }}>{s.value}</div>
-          </div>
-        ))}
-        <button onClick={load} style={{ marginLeft: 'auto', background: 'var(--surface2)', border: '1px solid var(--border2)', color: 'var(--muted)', fontSize: 11, padding: '5px 12px' }}>↻ Refresh</button>
-        {asOf && <span style={{ fontSize: 11, color: 'var(--muted)' }}>{asOf}</span>}
-      </div>
-
-      {/* Stop-loss alerts */}
-      {stopAlerts.length > 0 && (
-        <Card title="Stop-Loss Alerts">
-          <table>
-            <thead><tr>
-              <th>Ticker</th>
-              <th>Strategy</th>
-              <th>Verdict</th>
-              <th>Signals</th>
-              <th>Reason</th>
-            </tr></thead>
-            <tbody>
-              {stopAlerts.map((r: any, i: number) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{r.ticker}</td>
-                  <td style={{ color: 'var(--muted)', fontSize: 12 }}>{r.strategy ?? '—'}</td>
-                  <td>
-                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: verdictBg(r.verdict), color: verdictColor(r.verdict), fontWeight: 700 }}>
-                      {r.verdict}
-                    </span>
-                  </td>
-                  <td style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>
-                    {(r.signals ?? []).join(', ') || '—'}
-                  </td>
-                  <td style={{ fontSize: 12, color: 'var(--muted)', maxWidth: 300 }}>
-                    {(r.reasons ?? []).join(' · ') || r.recommended_action || '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
-
-      {/* Exit candidates */}
-      {exitCands.length > 0 && (
-        <Card title="Exit Candidates">
-          <table>
-            <thead><tr>
-              <th>Ticker</th>
-              <th>Strategy</th>
-              <th>Action</th>
-              <th className="text-right">Mkt Val</th>
-              <th>Note</th>
-            </tr></thead>
-            <tbody>
-              {exitCands.map((r: any, i: number) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{r.ticker}</td>
-                  <td style={{ color: 'var(--muted)', fontSize: 12 }}>{r.strategy ?? '—'}</td>
-                  <td style={{ fontSize: 11, color: 'var(--green)', fontWeight: 600 }}>{r.action?.replace(/_/g, ' ')}</td>
-                  <td className="text-right mono" style={{ fontSize: 12 }}>{r.net_market_value != null ? fmt$(r.net_market_value) : '—'}</td>
-                  <td style={{ fontSize: 12, color: 'var(--muted)' }}>{r.note ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
-
-      {/* Entry candidates */}
-      <Card title="Entry Candidates">
-        <div style={{ overflowX: 'auto' }}>
-          <table>
-            <thead><tr>
-              <th>Ticker</th>
-              <th className="text-right">IV Rank</th>
-              <th className="text-right">Days to Earn.</th>
-              <th>Earn. State</th>
-              <th className="text-right">Conc %</th>
-              <th>Position</th>
-              <th>Action</th>
-            </tr></thead>
-            <tbody>
-              {entryCands.map((r: any, i: number) => {
-                const earnColor = r.earnings_state === 'approaching' ? 'var(--yellow)' : r.earnings_state === 'blackout' ? 'var(--red)' : 'var(--muted)';
-                return (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600 }}>{r.ticker}</td>
-                    <td className="text-right mono" style={{ color: ivrColor(r.iv_rank), fontWeight: 600 }}>
-                      {r.iv_rank != null ? `${r.iv_rank.toFixed(0)}` : '—'}
-                    </td>
-                    <td className="text-right mono" style={{ color: (r.days_to_earnings ?? 99) < 20 ? 'var(--yellow)' : 'var(--muted)' }}>
-                      {r.days_to_earnings != null ? `${r.days_to_earnings}d` : '—'}
-                    </td>
-                    <td style={{ fontSize: 11, color: earnColor, textTransform: 'uppercase' }}>{r.earnings_state ?? '—'}</td>
-                    <td className="text-right mono" style={{ color: Math.abs(r.concentration_pct ?? 0) > 10 ? 'var(--yellow)' : 'var(--muted)', fontSize: 12 }}>
-                      {r.concentration_pct != null ? `${r.concentration_pct.toFixed(1)}%` : '—'}
-                    </td>
-                    <td style={{ fontSize: 11, color: r.has_existing_position ? 'var(--green)' : 'var(--muted)' }}>
-                      {r.has_existing_position ? 'existing' : 'new'}
-                    </td>
-                    <td>
-                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(99,102,241,0.1)', color: actionColor(r.action ?? ''), fontWeight: 600 }}>
-                        {(r.action ?? '—').replace(/_/g, ' ')}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-    </div>
   );
 }

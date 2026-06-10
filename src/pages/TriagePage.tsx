@@ -3,7 +3,12 @@ import Layout from '../components/Layout';
 import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getRollAll, getStopLossAll, getAlerts, evaluateRoll, type AlertData } from '../lib/api';
+import {
+  getRollAll, getStopLossAll, getAlerts, evaluateRoll, getPendingOrders, getTradeReport,
+  fmt$, fmtDateTime,
+  type AlertData, type OrderData, type TradeReportData,
+} from '../lib/api';
+import { URGENCY_COLOR, URGENCY_BG, VERDICT_COLOR, VERDICT_BG } from '../lib/colors';
 
 // ── Public helper: count ACT signals (used by Sidebar for badge) ──────────────
 export function countActSignals(stopData: any): number {
@@ -15,6 +20,8 @@ export default function TriagePage() {
   const [rollData, setRollData] = useState<any>(null);
   const [stopData, setStopData] = useState<any>(null);
   const [alerts, setAlerts]     = useState<AlertData[]>([]);
+  const [orders, setOrders]     = useState<OrderData[]>([]);
+  const [report, setReport]     = useState<TradeReportData | null>(null);
   const [rollPnl, setRollPnl]   = useState<Map<string, any>>(new Map());
   const [loading, setLoading]  = useState(true);
   const [error, setError]      = useState<string | null>(null);
@@ -26,7 +33,11 @@ export default function TriagePage() {
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
     setError(null);
-    const [r, s, a] = await Promise.allSettled([getRollAll(), getStopLossAll(), getAlerts()]);
+    const [r, s, a, o, tr] = await Promise.allSettled([
+      getRollAll(), getStopLossAll(), getAlerts(), getPendingOrders(), getTradeReport(),
+    ]);
+    if (o.status === 'fulfilled') setOrders([...(o.value?.orders ?? []), ...(o.value?.pending ?? [])]);
+    if (tr.status === 'fulfilled') setReport(tr.value);
     if (r.status === 'fulfilled') {
       setRollData(r.value);
       // Load roll P&L estimates in background for urgent/warning positions
@@ -76,14 +87,20 @@ export default function TriagePage() {
     });
   };
 
-  const actCount = countActSignals(stopData);
+  // Pending orders refresh on a faster cadence (15s) — order status is the
+  // most latency-sensitive item on this page. Read-only: approvals via Claude (#78).
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      getPendingOrders()
+        .then(o => setOrders([...(o?.orders ?? []), ...(o?.pending ?? [])]))
+        .catch(() => {});
+    }, 15_000);
+    return () => clearInterval(id);
+  }, []);
 
-  const URGENCY_COLOR: Record<string, string> = {
-    urgent: 'var(--red)', warning: 'var(--yellow)', approaching: 'var(--accent)', none: 'var(--muted)',
-  };
-  const VERDICT_COLOR: Record<string, string> = {
-    ACT: 'var(--red)', WATCH: 'var(--yellow)', SAFE: 'var(--green)',
-  };
+  const actCount = countActSignals(stopData);
+  const exitCands = report?.exit_candidates ?? [];
 
   return (
     <Layout title="Triage" onRefresh={load} loading={loading} lastUpdated={updatedAt}
@@ -107,6 +124,62 @@ export default function TriagePage() {
         <div style={{ padding: '12px 16px', borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
           <span style={{ color: 'var(--red)', fontWeight: 700, fontSize: 14 }}>⚠ {actCount} stop-loss ACT signal{actCount !== 1 ? 's' : ''}</span>
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>— review the stop-loss table below</span>
+        </div>
+      )}
+
+      {/* ── Pending orders (read-only — approvals via Claude, #78) ──────────── */}
+      {orders.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Pending Orders ({orders.length})
+            </div>
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+              read-only — approve/decline via Claude (e.g. “approve order {String(orders[0]?.id ?? '').slice(0, 8)}”)
+            </span>
+          </div>
+          <Card>
+            <div style={{ overflowX: 'auto' }}>
+              <table>
+                <thead><tr>
+                  <th>Ticker</th>
+                  <th>Strategy</th>
+                  <th>Legs</th>
+                  <th className="text-right">Qty</th>
+                  <th className="text-right">Limit</th>
+                  <th>Status</th>
+                  <th>IBKR</th>
+                  <th>Created</th>
+                  <th>ID</th>
+                </tr></thead>
+                <tbody>
+                  {orders.map((o: any, i: number) => {
+                    const legsTxt = (o.legs ?? [])
+                      .map((l: any) => `${l.action === 'BUY' ? '+' : '−'}${l.strike ?? ''}${l.right ?? l.sec_type ?? ''}${l.expiry ? ` ${l.expiry.slice(5)}` : ''}`)
+                      .join(' / ');
+                    const st = (o.status ?? 'pending').toLowerCase();
+                    const stColor = st === 'pending' ? 'var(--yellow)' : st === 'submitted' ? 'var(--accent)' : st === 'filled' ? 'var(--green)' : 'var(--muted)';
+                    const ibkrSt = o.ibkr_status ?? o.broker_status ?? o.ibkr_order_status ?? null;
+                    return (
+                      <tr key={o.id ?? i}>
+                        <td style={{ fontWeight: 700 }}>{o.ticker ?? '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--accent)', fontFamily: 'monospace' }}>{o.strategy ?? o.order_type ?? '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'monospace' }}>{legsTxt || '—'}</td>
+                        <td className="text-right mono" style={{ fontSize: 12 }}>{o.quantity ?? '—'}</td>
+                        <td className="text-right mono" style={{ fontSize: 12 }}>{o.limit_price != null ? fmt$(o.limit_price, 2) : '—'}</td>
+                        <td>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase', color: stColor, background: 'var(--surface2)' }}>{st}</span>
+                        </td>
+                        <td style={{ fontSize: 11, color: ibkrSt ? 'var(--fg)' : 'var(--muted)', fontFamily: 'monospace' }}>{ibkrSt ?? '—'}</td>
+                        <td style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>{o.created_at ? fmtDateTime(o.created_at) : '—'}</td>
+                        <td style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>{String(o.id ?? '').slice(0, 8)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </div>
       )}
 
@@ -204,7 +277,7 @@ export default function TriagePage() {
                         {p.current_dte != null ? `${p.current_dte}d` : '—'}
                       </td>
                       <td>
-                        <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase', color: URGENCY_COLOR[p.urgency] ?? 'var(--muted)', background: p.urgency === 'urgent' ? 'rgba(239,68,68,0.1)' : p.urgency === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(100,116,139,0.1)' }}>{p.urgency ?? '—'}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase', color: URGENCY_COLOR[p.urgency] ?? 'var(--muted)', background: URGENCY_BG[p.urgency] ?? 'rgba(100,116,139,0.1)' }}>{p.urgency ?? '—'}</span>
                       </td>
                       <td className="text-right mono" style={{ fontSize: 12, color: creditColor }}>
                         {credit != null ? `${credit >= 0 ? '+' : ''}$${Math.abs(credit).toFixed(0)}` : (rp ? '—' : '')}
@@ -271,7 +344,7 @@ export default function TriagePage() {
                           {p.sma_200 != null ? `$${p.sma_200.toFixed(2)}` : '—'}
                         </td>
                         <td>
-                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase', color: VERDICT_COLOR[p.verdict] ?? 'var(--muted)', background: p.verdict === 'ACT' ? 'rgba(239,68,68,0.12)' : p.verdict === 'WATCH' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)' }}>{p.verdict ?? '—'}</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase', color: VERDICT_COLOR[p.verdict] ?? 'var(--muted)', background: VERDICT_BG[p.verdict] ?? 'rgba(100,116,139,0.1)' }}>{p.verdict ?? '—'}</span>
                         </td>
                         <td style={{ fontSize: 12, color: p.verdict === 'ACT' ? 'var(--red)' : 'var(--muted)' }}>
                           {p.recommended_action ?? '—'}
@@ -289,6 +362,37 @@ export default function TriagePage() {
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>No stop-loss signals.</p>
         )}
       </div>
+
+      {/* ── Exit candidates (from trade report, #85) ─────────────────────────── */}
+      {exitCands.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Exit Candidates</div>
+          <Card>
+            <div style={{ overflowX: 'auto' }}>
+              <table>
+                <thead><tr>
+                  <th>Ticker</th>
+                  <th>Strategy</th>
+                  <th>Action</th>
+                  <th className="text-right">Mkt Val</th>
+                  <th>Note</th>
+                </tr></thead>
+                <tbody>
+                  {exitCands.map((r: any, i: number) => (
+                    <tr key={i}>
+                      <td style={{ fontWeight: 600 }}>{r.ticker}</td>
+                      <td style={{ color: 'var(--muted)', fontSize: 12 }}>{r.strategy ?? '—'}</td>
+                      <td style={{ fontSize: 11, color: 'var(--green)', fontWeight: 600 }}>{(r.action ?? '—').replace(/_/g, ' ')}</td>
+                      <td className="text-right mono" style={{ fontSize: 12 }}>{r.net_market_value != null ? fmt$(r.net_market_value) : '—'}</td>
+                      <td style={{ fontSize: 12, color: 'var(--muted)' }}>{r.note ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {!loading && !error && !rollData && !stopData && (
         <p style={{ color: 'var(--muted)', textAlign: 'center', padding: 60 }}>No triage data available.</p>

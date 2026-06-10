@@ -5,7 +5,8 @@ import Card from '../components/Card';
 import { TabBar } from '../components/Tabs';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getCalendar, fetchEarnings, getQuantDataReports, getUniverse, getIvRank, getGex, getVolSkew, getVolAnalytics, getEarningsVolatility, type IvRankData } from '../lib/api';
+import { KVChip } from '../components/KV';
+import { getCalendar, fetchEarnings, getUniverse, getIvRank, getGex, getVolSkew, getVolAnalytics, getEarningsVolatility, type IvRankData } from '../lib/api';
 import { UniverseSection } from '../components/system/UniverseSection';
 
 // Recharts (~688KB) is only needed for the Analytics tab — lazy-load it
@@ -14,10 +15,15 @@ const GexChart    = lazy(() => import('../components/AnalyticsCharts').then(m =>
 const VolSkewChart = lazy(() => import('../components/AnalyticsCharts').then(m => ({ default: m.VolSkewChart })));
 const VolSkewSvg  = lazy(() => import('../components/AnalyticsCharts').then(m => ({ default: m.VolSkewSvg })));
 
+// Sprint 13 (#84): Analytics inverted — universe IV Rank signal board renders
+// FIRST (scan), clicking a row loads the per-ticker GEX/Skew/Ladder detail
+// below it (drill). QuantData plumbing (status/config/tool grid/“query via
+// Claude” card) removed from Market — connection state lives in System >
+// Settings > Connections.
+
 export default function MarketPage() {
   const [tab, setTab]           = useState('analytics');
   const [cal, setCal]           = useState<any>(null);
-  const [qd, setQd]             = useState<any>(null);
   const [universe, setUniverse]     = useState<string[]>([]);
   const [universeRaw, setUniverseRaw] = useState<any>(null);
   const [loading, setLoading]   = useState(true);
@@ -29,11 +35,8 @@ export default function MarketPage() {
     if (!background) setLoading(true);
     setError(null);
     try {
-      const [c, q, u] = await Promise.allSettled([
-        getCalendar(), getQuantDataReports(), getUniverse(),
-      ]);
+      const [c, u] = await Promise.allSettled([getCalendar(), getUniverse()]);
       if (c.status === 'fulfilled') setCal(c.value);
-      if (q.status === 'fulfilled') setQd(q.value);
       if (u.status === 'fulfilled') {
         const val = u.value as any;
         setUniverseRaw(val);
@@ -62,11 +65,12 @@ export default function MarketPage() {
     { key: 'universe',  label: 'Universe'          },
   ];
 
-  // Tab keyboard shortcuts: 1-3
+  // Tab keyboard shortcuts: 1-3 (modifier guard #91)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
-      if (['INPUT','SELECT','TEXTAREA'].includes(target.tagName)) return;
+      if (['INPUT','SELECT','TEXTAREA'].includes(target.tagName) || target.isContentEditable) return;
       const n = parseInt(e.key, 10);
       if (n >= 1 && n <= TABS.length) setTab(TABS[n - 1].key);
     };
@@ -76,7 +80,7 @@ export default function MarketPage() {
 
   return (
     <Layout title="Market" onRefresh={load} loading={loading} lastUpdated={updatedAt}>
-      {loading && !cal && !qd && (
+      {loading && !cal && (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
           <Spinner size={32} />
         </div>
@@ -102,18 +106,8 @@ export default function MarketPage() {
         </Card>
       )}
 
-      {/* ANALYTICS (per-ticker deep-dive + universe-wide QuantData signals) */}
-      {tab === 'analytics' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
-          <AnalyticsTab universe={universe} />
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
-              Universe Signals (QuantData)
-            </h3>
-            <QuantDataTab qd={qd} universe={universe} />
-          </div>
-        </div>
-      )}
+      {/* ANALYTICS — scan (signal board) first, drill (per-ticker) below */}
+      {tab === 'analytics' && <AnalyticsTab universe={universe} />}
 
       {/* UNIVERSE */}
       {tab === 'universe' && (
@@ -125,13 +119,47 @@ export default function MarketPage() {
   );
 }
 
-// ─── Analytics Tab (merged GEX/Skew + IV Ladder) ─────────────────────────────
+// ─── Analytics Tab ────────────────────────────────────────────────────────────
 
 type AnalyticsView = 'gex' | 'ladder';
 
 function AnalyticsTab({ universe }: { universe: string[] }) {
   const tickers = universe.length ? universe : ['SPY'];
-  const [ticker, setTicker]     = useState(tickers[0]);
+  const [ticker, setTicker] = useState<string | null>(null);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* 1. Scan: universe signal board */}
+      <IvRankSection universe={tickers} selected={ticker} onSelect={setTicker} />
+
+      {/* Known issues callout — kept adjacent to the table it qualifies */}
+      <div style={{
+        background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
+        borderRadius: 10, padding: '12px 16px',
+        display: 'flex', gap: 12, alignItems: 'flex-start',
+      }}>
+        <span style={{ color: 'var(--red)', fontSize: 16, flexShrink: 0 }}>⚠</span>
+        <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>
+          Upstream quantdata-mcp issues: <code style={{ fontFamily: 'monospace' }}>iv_rank</code> can return identical
+          values per ticker when an explicit expiration is passed; <code style={{ fontFamily: 'monospace' }}>exposure_by_strike</code>{' '}
+          and <code style={{ fontFamily: 'monospace' }}>volatility_skew</code> return empty during market hours.
+          Cross-check via Claude before acting on this table.
+        </p>
+      </div>
+
+      {/* 2. Drill: per-ticker detail for the selected row */}
+      {ticker ? (
+        <TickerDetail ticker={ticker} />
+      ) : (
+        <p style={{ color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>
+          Click a ticker row above to load its GEX, skew, and IV ladder.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TickerDetail({ ticker }: { ticker: string }) {
   const [view, setView]         = useState<AnalyticsView>('gex');
   const [gexData, setGexData]   = useState<any>(null);
   const [skewData, setSkewData] = useState<any>(null);
@@ -157,18 +185,9 @@ function AnalyticsTab({ universe }: { universe: string[] }) {
   const skewCalls: any[] = (volData?.skew ?? []).filter((r: any) => r.type === 'c');
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Ticker selector + view toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        {tickers.map(t => (
-          <button key={t} onClick={() => setTicker(t)} style={{
-            fontSize: 12, padding: '5px 12px', borderRadius: 6, cursor: 'pointer',
-            background: ticker === t ? 'var(--accent)' : 'var(--surface2)',
-            color: ticker === t ? '#fff' : 'var(--muted)',
-            border: ticker === t ? 'none' : '1px solid var(--border2)',
-            fontWeight: ticker === t ? 600 : 400,
-          }}>{t}</button>
-        ))}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>{ticker}</span>
         {loading && <Spinner size={14} />}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 0, border: '1px solid var(--border2)', borderRadius: 6, overflow: 'hidden' }}>
           {([
@@ -260,125 +279,6 @@ function AnalyticsTab({ universe }: { universe: string[] }) {
           )}
         </>
       )}
-    </div>
-  );
-}
-
-function KVChip({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 8, padding: '8px 14px',
-    }}>
-      <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 3 }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: 700, color, fontFamily: 'monospace' }}>{value}</div>
-    </div>
-  );
-}
-
-// ─── QuantData Tab ────────────────────────────────────────────────────────────
-
-const QD_CATEGORIES: { label: string; tools: string[] }[] = [
-  { label: 'Volatility',  tools: ['iv_rank','volatility_skew','volatility_drift','term_structure','net_drift'] },
-  { label: 'Flow',        tools: ['order_flow','net_flow','dark_pool_levels','unconsolidated_flow','trade_side_stats'] },
-  { label: 'Exposure',    tools: ['exposure_by_strike','exposure_by_expiration','oi_by_strike','oi_by_expiration','oi_change','oi_over_time'] },
-  { label: 'Max Pain',    tools: ['max_pain','max_pain_over_time'] },
-  { label: 'Market',      tools: ['market_snapshot','gainers_losers','heat_map','interval_map','get_news_articles'] },
-  { label: 'Price',       tools: ['contract_price','contract_statistics','stock_price_time','get_equity_prints'] },
-];
-
-const BROKEN_TOOLS = new Set(['exposure_by_strike','volatility_skew']);
-
-function QuantDataTab({ qd, universe }: { qd: any; universe: string[] }) {
-  const toolNames: Set<string> = new Set(
-    (qd?.all_tools_in_config ?? []).map((t: any) => t.name as string)
-  );
-  const toolCount = qd?.config_tool_count ?? toolNames.size ?? 0;
-  const connected = toolCount > 0;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-      {/* Status bar */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 10, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 10,
-        }}>
-          <span style={{
-            width: 8, height: 8, borderRadius: '50%',
-            background: connected ? 'var(--green)' : 'var(--red)',
-            display: 'inline-block', flexShrink: 0,
-            boxShadow: connected ? '0 0 6px var(--green)' : undefined,
-          }} />
-          <span style={{ fontSize: 13, fontWeight: 600 }}>
-            {connected ? 'QuantData Connected' : 'QuantData Offline'}
-          </span>
-        </div>
-        {connected && (
-          <div style={{
-            background: 'var(--surface)', border: '1px solid var(--border)',
-            borderRadius: 10, padding: '14px 20px',
-          }}>
-            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Tools</div>
-            <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'monospace' }}>{toolCount}</div>
-          </div>
-        )}
-        {qd?.config_paths_checked?.[0] && (
-          <div style={{
-            background: 'var(--surface)', border: '1px solid var(--border)',
-            borderRadius: 10, padding: '14px 20px',
-          }}>
-            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Config</div>
-            <div style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--muted)' }}>
-              {qd.config_paths_checked[0].replace('/home/ubuntu','~').replace('/root','/root')}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* IV Rank signal board — primary content */}
-      {connected && <IvRankSection universe={universe} />}
-
-      {/* Known issues callout */}
-      <div style={{
-        background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
-        borderRadius: 10, padding: '14px 16px',
-        display: 'flex', gap: 12, alignItems: 'flex-start',
-      }}>
-        <span style={{ color: 'var(--red)', fontSize: 16, flexShrink: 0 }}>⚠</span>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Known issues</div>
-          <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>
-            <code style={{ fontFamily: 'monospace' }}>exposure_by_strike</code> and{' '}
-            <code style={{ fontFamily: 'monospace' }}>volatility_skew</code> return no options data during
-            market hours (price resolves, options layer empty). GitHub issue pending on quantdata-mcp.
-          </p>
-          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '6px 0 0' }}>
-            <code style={{ fontFamily: 'monospace' }}>iv_rank</code> currently returns identical IVR/IV/52w
-            range values for every ticker when an explicit <code style={{ fontFamily: 'monospace' }}>expiration_date</code> is
-            passed — confirmed at the quantdata-mcp level (not a Parapet bug). Treat the IV Rank table below as
-            unreliable until upstream fixes this; cross-check via Claude before acting on it.
-          </p>
-        </div>
-      </div>
-
-      {/* Live data hint */}
-      <div style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 10, padding: '14px 16px',
-        display: 'flex', gap: 12, alignItems: 'flex-start',
-      }}>
-        <span style={{ fontSize: 16, flexShrink: 0 }}>💬</span>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Query via Claude</div>
-          <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>
-            Live QuantData signals (IV rank, order flow, dark pool, max pain) are available through Claude.
-            Try: <em>"What's the IV rank for MSFT?"</em> or <em>"Show me SPX order flow."</em>
-          </p>
-        </div>
-      </div>
-
     </div>
   );
 }
@@ -492,7 +392,7 @@ function EarningsTable({ cal }: { cal: any }) {
   );
 }
 
-// ─── IV Rank Section ──────────────────────────────────────────────────────────
+// ─── IV Rank Section (signal board) ───────────────────────────────────────────
 
 type IvState = { status: 'idle' | 'loading' | 'ok' | 'error'; data?: IvRankData; error?: string };
 type IvrCache = IvRankData & { cached_at: string };
@@ -520,7 +420,11 @@ function fmtCacheAge(iso: string): string {
     d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
-function IvRankSection({ universe }: { universe: string[] }) {
+function IvRankSection({ universe, selected, onSelect }: {
+  universe: string[];
+  selected: string | null;
+  onSelect: (t: string) => void;
+}) {
   const [rows, setRows] = useState<Record<string, IvState>>({});
   const [fetching, setFetching] = useState(false);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -547,7 +451,7 @@ function IvRankSection({ universe }: { universe: string[] }) {
   }, [universe]);
 
   // Auto-load on mount when universe is available
-  useEffect(() => { if (universe.length) loadAll(); }, [universe.length]);
+  useEffect(() => { if (universe.length) loadAll(); }, [universe.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasData = Object.values(rows).some(r => r.status === 'ok' || r.status === 'error');
 
@@ -562,14 +466,12 @@ function IvRankSection({ universe }: { universe: string[] }) {
         continue;
       }
       const live = row.data!;
-      // If live has iv_rank, use fully live; otherwise merge with cache for null fields
       if (live.iv_rank != null) {
         result[ticker] = { data: live, fromCache: false };
       } else {
         const cached = loadIvrCache(ticker);
         if (cached) {
-          // Overlay cached values where live is null
-          const merged: IvRankData = {
+          const mergedRow: IvRankData = {
             ticker: live.ticker,
             session_date: live.session_date,
             iv_rank:    live.iv_rank    ?? cached.iv_rank,
@@ -579,7 +481,7 @@ function IvRankSection({ universe }: { universe: string[] }) {
             call_iv:    live.call_iv    ?? cached.call_iv,
             put_iv:     live.put_iv     ?? cached.put_iv,
           };
-          result[ticker] = { data: merged, fromCache: true, cacheLabel: fmtCacheAge(cached.cached_at) };
+          result[ticker] = { data: mergedRow, fromCache: true, cacheLabel: fmtCacheAge(cached.cached_at) };
         } else {
           result[ticker] = { data: live, fromCache: false };
         }
@@ -590,7 +492,6 @@ function IvRankSection({ universe }: { universe: string[] }) {
 
   const anyCache = Object.values(merged).some(r => r.fromCache);
 
-  // Sort by effective IVR (live or cached)
   const sortedUniverse = useMemo(() => {
     return [...universe].sort((a, b) => {
       const ar = merged[a]?.data?.iv_rank ?? -1;
@@ -676,9 +577,18 @@ function IvRankSection({ universe }: { universe: string[] }) {
                   ? d.call_iv > d.put_iv ? '↑ call' : d.put_iv > d.call_iv ? '↓ put' : '='
                   : null;
                 const biasColor = bias === '↑ call' ? 'var(--green)' : bias === '↓ put' ? 'var(--red)' : 'var(--muted)';
+                const isSel = selected === ticker;
                 return (
-                  <tr key={ticker} style={{ opacity: m.fromCache ? 0.75 : 1 }}>
-                    <td style={{ fontWeight: 600 }}>
+                  <tr
+                    key={ticker}
+                    onClick={() => onSelect(ticker)}
+                    style={{
+                      opacity: m.fromCache ? 0.75 : 1,
+                      cursor: 'pointer',
+                      background: isSel ? 'rgba(99,102,241,0.08)' : undefined,
+                    }}
+                  >
+                    <td style={{ fontWeight: 600, color: isSel ? 'var(--accent)' : undefined }}>
                       {ticker}
                       {m.fromCache && m.cacheLabel && (
                         <span style={{ marginLeft: 6, fontSize: 9, color: 'var(--muted)', fontWeight: 400 }}>
@@ -701,7 +611,7 @@ function IvRankSection({ universe }: { universe: string[] }) {
             </tbody>
           </table>
           <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 10 }}>
-            IV Rank ≥ 25 required for new entries (✓). ≥ 50 = prime entry zone.
+            IV Rank ≥ 25 required for new entries (✓). ≥ 50 = prime entry zone. Click a row for GEX / skew / ladder detail.
             {anyCache && ' · Faded rows show last cached close values.'}
           </p>
         </div>
@@ -709,17 +619,3 @@ function IvRankSection({ universe }: { universe: string[] }) {
     </Card>
   );
 }
-
-// ─── KV chip ──────────────────────────────────────────────────────────────────
-
-function KV({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 10, padding: '14px 20px', minWidth: 120,
-    }}>
-      <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: color ?? 'var(--text)', fontFamily: 'monospace' }}>{value}</div>
-    </div>
-  );
-} 

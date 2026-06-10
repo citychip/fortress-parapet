@@ -46,10 +46,15 @@ export default function Layout({ title, children, action, onRefresh, loading, la
   // Close sidebar on navigation when narrow
   useEffect(() => { if (narrow) setSideOpen(false); }, [loc]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Market-status chip: poll every 60s (#88) — previously fetched once on
+  // mount, so the chip showed "Pre" all day if the app stayed open.
   useEffect(() => {
-    getTimeOfDay()
+    const poll = () => getTimeOfDay()
       .then(d => setMktGroup(d?.group ?? null))
       .catch(() => {});
+    poll();
+    const id = setInterval(poll, 60_000);
+    return () => clearInterval(id);
   }, []);
 
   // Keyboard shortcuts — ignore when typing in inputs

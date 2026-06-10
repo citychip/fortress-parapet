@@ -179,8 +179,26 @@ export const getPositions      = (aggregated = true) =>
   req<{ positions: PositionData[] }>(`/api/positions?aggregated=${aggregated}`);
 export const getPnl            = () => req<PnLData>('/api/pnl');
 export const getPnlHistory     = () => req<any>('/api/pnl/history');
-export const getPortfolioBeta  = () => req<any>('/api/portfolio/beta');
-export const getSectorExposure = () => req<any>('/api/portfolio/sector-exposure');
+export interface BetaComponent {
+  ticker: string;
+  beta?: number | null;
+  price?: number | null;
+  delta_contribution?: number | null;
+}
+export interface BetaData {
+  beta_weighted_delta?: number | null;
+  spy_price?: number | null;
+  component_betas?: BetaComponent[];
+}
+export interface SectorRow {
+  sector?: string;
+  name?: string;
+  pct?: number | null;
+  notional?: number | null;
+  tickers?: string[];
+}
+export const getPortfolioBeta  = () => req<BetaData>('/api/portfolio/beta');
+export const getSectorExposure = () => req<{ sectors?: SectorRow[] } | SectorRow[]>('/api/portfolio/sector-exposure');
 export const getCapitalEff     = () => req<any>('/api/portfolio/capital-efficiency');
 export interface ForwardPnlPoint { price: number; pnl: number; }
 export interface ForwardPnlData {
@@ -273,10 +291,36 @@ export const getStrategyMetrics = (ticker: string, mode = 'new', target_dte = 45
   );
 
 // ── Manage / Triage ──────────────────────────────────────────────────────────
-export const getTimeOfDay   = () => req<any>('/api/run/time_of_day');
-export const getRollAll     = () => req<any>('/api/manage/roll_all');
-export const getStopLossAll = () => req<any>('/api/manage/stop_loss_all');
-export const getPretradeAll = () => req<any>('/api/manage/pretrade_all');
+export interface RollPosition {
+  ticker: string;
+  strategy?: string | null;
+  expiry?: string | null;
+  short_strike?: number | null;
+  current_delta?: number | null;
+  current_dte?: number | null;
+  urgency?: 'urgent' | 'warning' | 'approaching' | 'none' | string;
+  reasons?: string[];
+}
+export interface RollAllData {
+  summary?: { urgent?: number; warning?: number; approaching?: number; none?: number };
+  positions?: RollPosition[];
+}
+export interface StopLossPosition {
+  ticker: string;
+  latest_price?: number | null;
+  sma_200?: number | null;
+  verdict?: 'ACT' | 'WATCH' | 'SAFE' | string;
+  recommended_action?: string | null;
+  signals?: string[];
+}
+export interface StopLossAllData {
+  summary?: { act_immediately?: number; act?: number; watch?: number; safe?: number };
+  positions?: StopLossPosition[];
+}
+export const getTimeOfDay   = () => req<{ group?: string }>('/api/run/time_of_day');
+export const getRollAll     = () => req<RollAllData>('/api/manage/roll_all');
+export const getStopLossAll = () => req<StopLossAllData>('/api/manage/stop_loss_all');
+export const getPretradeAll = () => req<{ results?: Array<{ ticker: string; verdict?: string | null }> }>('/api/manage/pretrade_all');
 export const evaluateRoll   = (ticker: string) =>
   req<any>(`/api/manage/evaluate_roll?ticker=${encodeURIComponent(ticker)}`);
 
@@ -286,7 +330,19 @@ export const getVolSkew      = (ticker: string) => req<any>(`/api/options/vol-sk
 export const getVolAnalytics = (ticker: string) => req<any>(`/api/options/vol-analytics?ticker=${encodeURIComponent(ticker)}`);
 
 // ── Reports ──────────────────────────────────────────────────────────────────
-export const getTradeReport       = () => req<any>('/api/manage/trade_report');
+export interface TradeReportData {
+  as_of?: string;
+  macro?: { regime?: string };
+  summary?: { stop_loss_alerts_count?: number; entry_candidates_count?: number; exit_candidates_count?: number };
+  stop_loss_alerts?: Array<StopLossPosition & { strategy?: string | null; reasons?: string[] }>;
+  exit_candidates?: Array<{ ticker: string; strategy?: string | null; action?: string; net_market_value?: number | null; note?: string | null }>;
+  entry_candidates?: Array<{
+    ticker: string; iv_rank?: number | null; days_to_earnings?: number | null;
+    earnings_state?: string | null; concentration_pct?: number | null;
+    has_existing_position?: boolean; action?: string | null;
+  }>;
+}
+export const getTradeReport       = () => req<TradeReportData>('/api/manage/trade_report');
 export const getPositionLimits    = (ticker: string, legs: any[]) => {
   const params = new URLSearchParams({ ticker, legs: JSON.stringify(legs) });
   return req<any>(`/api/options/position-limits?${params.toString()}`);

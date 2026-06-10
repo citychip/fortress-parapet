@@ -239,11 +239,12 @@ export default function SystemPage() {
     { key: 'journal',  label: 'Journal'  },
   ];
 
-  // Tab keyboard shortcuts: 1-5
+  // Tab keyboard shortcuts: 1-5 (modifier guard #91)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
-      if (['INPUT','SELECT','TEXTAREA'].includes(target.tagName)) return;
+      if (['INPUT','SELECT','TEXTAREA'].includes(target.tagName) || target.isContentEditable) return;
       const n = parseInt(e.key, 10);
       if (n >= 1 && n <= TABS.length) setTab(TABS[n - 1].key);
     };

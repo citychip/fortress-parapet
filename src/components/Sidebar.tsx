@@ -2,14 +2,15 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { getIbkrStatus, getStopLossAll, getPendingOrders, type IbkrStatusData } from '../lib/api';
 
-// badgeKey links a nav item to a live count
-const NAV: { path: string; label: string; icon: string; badgeKey?: 'act' | 'orders' }[] = [
+// badgeKeys link a nav item to live counts. Sprint 13 (#78): pending-orders
+// badge moved from System → Triage, where order status now lives.
+const NAV: { path: string; label: string; icon: string; badgeKeys?: Array<'act' | 'orders'> }[] = [
   { path: '/',           label: 'Briefing',   icon: '◈' },
-  { path: '/triage',     label: 'Triage',     icon: '⚑', badgeKey: 'act' },
+  { path: '/triage',     label: 'Triage',     icon: '⚑', badgeKeys: ['act', 'orders'] },
   { path: '/candidates', label: 'Candidates', icon: '⊕' },
   { path: '/market',     label: 'Market',     icon: '◎' },
   { path: '/positions',  label: 'Positions',  icon: '▦' },
-  { path: '/system',     label: 'System',     icon: '⚙', badgeKey: 'orders' },
+  { path: '/system',     label: 'System',     icon: '⚙' },
 ];
 
 function useIbkrDot() {
@@ -90,11 +91,11 @@ export default function Sidebar() {
 
       {/* Nav items */}
       {NAV.map(item => {
-        const active      = location === item.path || (item.path !== '/' && location.startsWith(item.path));
-        const badgeCount  = item.badgeKey ? (badgeCounts[item.badgeKey] ?? 0) : 0;
-        const badgeColor  = item.badgeKey ? (badgeColors[item.badgeKey] ?? 'var(--red)') : 'var(--red)';
-        const showBadge   = badgeCount > 0;
-        const iconColor   = active ? 'var(--accent)' : showBadge ? badgeColor : 'var(--muted)';
+        const active = location === item.path || (item.path !== '/' && location.startsWith(item.path));
+        const badges = (item.badgeKeys ?? [])
+          .map(k => ({ key: k, count: badgeCounts[k] ?? 0, color: badgeColors[k] ?? 'var(--red)' }))
+          .filter(b => b.count > 0);
+        const iconColor = active ? 'var(--accent)' : badges.length ? badges[0].color : 'var(--muted)';
 
         return (
           <button
@@ -114,18 +115,21 @@ export default function Sidebar() {
           >
             <span style={{ fontSize: 14, color: iconColor }}>{item.icon}</span>
             {item.label}
-            {showBadge && (
-              <span style={{
-                marginLeft: 'auto',
-                minWidth: 18, height: 18,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 9,
-                background: badgeColor,
-                color: '#fff',
-                fontSize: 10,
-                fontWeight: 700,
-                padding: '0 5px',
-              }}>{badgeCount}</span>
+            {badges.length > 0 && (
+              <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+                {badges.map(b => (
+                  <span key={b.key} title={b.key === 'act' ? 'Stop-loss ACT signals' : 'Pending orders'} style={{
+                    minWidth: 18, height: 18,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    borderRadius: 9,
+                    background: b.color,
+                    color: '#fff',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    padding: '0 5px',
+                  }}>{b.count}</span>
+                ))}
+              </span>
             )}
           </button>
         );
