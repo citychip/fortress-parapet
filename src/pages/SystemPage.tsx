@@ -13,6 +13,7 @@ import {
   listScripts, runScript, getIbkrStatus, triggerIbkrSync,
   getJournal, addJournalEntry,
   getAlerts, addAlert, deleteAlert,
+  fmtDateTime,
   type IbkrStatusData, type AlertData,
 } from '../lib/api';
 import { AlertsSection } from '../components/system/AlertsSection';
@@ -451,7 +452,7 @@ function JournalTab() {
                 }}>
                   {ts && (
                     <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6, fontFamily: 'monospace' }}>
-                      {new Date(ts).toLocaleString()}
+                      {fmtDateTime(ts)}
                     </div>
                   )}
                   {tradeRecord ? (

@@ -142,6 +142,10 @@ export function VolSkewChart({ data, ticker }: { data: any; ticker: string }) {
           <CartesianGrid stroke="var(--border)" strokeOpacity={0.3} vertical={false} />
           <XAxis
             dataKey="strike"
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            allowDecimals={false}
+            tickCount={8}
             tickFormatter={(v: number) => `$${v}`}
             tick={{ fill: 'var(--muted)', fontSize: 10 }}
             tickLine={false}
@@ -210,6 +214,10 @@ export function VolSkewSvg({ puts, calls, spot }: { puts: any[]; calls: any[]; s
           <CartesianGrid stroke="var(--border)" strokeOpacity={0.3} vertical={false} />
           <XAxis
             dataKey="strike"
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            allowDecimals={false}
+            tickCount={8}
             tickFormatter={(v: number) => `$${v}`}
             tick={{ fill: 'var(--muted)', fontSize: 10 }}
             tickLine={false}
@@ -226,8 +234,8 @@ export function VolSkewSvg({ puts, calls, spot }: { puts: any[]; calls: any[]; s
           {spot > 0 && (
             <ReferenceLine x={spot} stroke="var(--accent)" strokeDasharray="4 3" strokeOpacity={0.8} label={{ value: `$${spot.toFixed(0)}`, fill: 'var(--accent)', fontSize: 10, position: 'top' }} />
           )}
-          <Line type="monotone" dataKey="putIv"  name="Put IV"  stroke="rgba(239,68,68,0.85)" strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="callIv" name="Call IV" stroke="rgba(34,197,94,0.85)" strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="putIv"  name="Put IV"  stroke="rgba(239,68,68,0.85)" strokeWidth={2} dot={false} connectNulls />
+          <Line type="monotone" dataKey="callIv" name="Call IV" stroke="rgba(34,197,94,0.85)" strokeWidth={2} dot={false} connectNulls />
         </LineChart>
       </ResponsiveContainer>
     </>

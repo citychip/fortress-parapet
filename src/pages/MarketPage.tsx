@@ -59,11 +59,10 @@ export default function MarketPage() {
   const TABS = [
     { key: 'analytics', label: 'Analytics'        },
     { key: 'calendar',  label: 'Earnings Calendar' },
-    { key: 'quantdata', label: 'QuantData'         },
     { key: 'universe',  label: 'Universe'          },
   ];
 
-  // Tab keyboard shortcuts: 1-4
+  // Tab keyboard shortcuts: 1-3
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -103,11 +102,18 @@ export default function MarketPage() {
         </Card>
       )}
 
-      {/* ANALYTICS (merged) */}
-      {tab === 'analytics' && <AnalyticsTab universe={universe} />}
-
-      {/* QUANTDATA */}
-      {tab === 'quantdata' && <QuantDataTab qd={qd} universe={universe} />}
+      {/* ANALYTICS (per-ticker deep-dive + universe-wide QuantData signals) */}
+      {tab === 'analytics' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+          <AnalyticsTab universe={universe} />
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
+              Universe Signals (QuantData)
+            </h3>
+            <QuantDataTab qd={qd} universe={universe} />
+          </div>
+        </div>
+      )}
 
       {/* UNIVERSE */}
       {tab === 'universe' && (
@@ -347,6 +353,12 @@ function QuantDataTab({ qd, universe }: { qd: any; universe: string[] }) {
             <code style={{ fontFamily: 'monospace' }}>exposure_by_strike</code> and{' '}
             <code style={{ fontFamily: 'monospace' }}>volatility_skew</code> return no options data during
             market hours (price resolves, options layer empty). GitHub issue pending on quantdata-mcp.
+          </p>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '6px 0 0' }}>
+            <code style={{ fontFamily: 'monospace' }}>iv_rank</code> currently returns identical IVR/IV/52w
+            range values for every ticker when an explicit <code style={{ fontFamily: 'monospace' }}>expiration_date</code> is
+            passed — confirmed at the quantdata-mcp level (not a Parapet bug). Treat the IV Rank table below as
+            unreliable until upstream fixes this; cross-check via Claude before acting on it.
           </p>
         </div>
       </div>

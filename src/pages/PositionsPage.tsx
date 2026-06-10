@@ -268,9 +268,11 @@ function ExposureTab({ sector, beta }: { sector: any; beta: any }) {
 
   const bwd = beta?.beta_weighted_delta ?? null;
   const bwdColor = bwd == null ? 'var(--muted)' : bwd > 0 ? 'var(--green)' : 'var(--red)';
-  // Target: 0.35 net long delta; show how far off
-  const deltaTarget = 0.35;
-  const deltaOff = bwd != null ? (bwd - deltaTarget).toFixed(2) : null;
+  // Target: 320 β-weighted delta (matches "β-wtd target" on System > Strategy).
+  // Note: this is in the same beta-weighted-delta units as `bwd`, distinct from the
+  // 0.25-0.35 per-position option-delta entry target shown elsewhere.
+  const deltaTarget = 320;
+  const deltaOff = bwd != null ? (bwd - deltaTarget).toFixed(1) : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -282,7 +284,7 @@ function ExposureTab({ sector, beta }: { sector: any; beta: any }) {
           <div className="mono" style={{ fontSize: 22, fontWeight: 700, color: bwdColor }}>{bwd?.toFixed(2) ?? '—'}</div>
           {deltaOff != null && (
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
-              target 0.35 · {Number(deltaOff) >= 0 ? '+' : ''}{deltaOff} off
+              target {deltaTarget} β-Δ · {Number(deltaOff) >= 0 ? '+' : ''}{deltaOff} off
             </div>
           )}
         </div>

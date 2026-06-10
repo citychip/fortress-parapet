@@ -362,6 +362,16 @@ export function fmtDelta(n: number | null | undefined): string {
   return (n >= 0 ? '+' : '') + n.toFixed(3);
 }
 
+// Consistent YYYY-MM-DD HH:MM:SS timestamp display, matching the app's
+// date_format setting (avoids locale-dependent toLocaleString output like "30-5-2026").
+export function fmtDateTime(ts: string | number | Date | null | undefined): string {
+  if (ts == null) return '—';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return String(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 export function clsN(n: number | null | undefined): string {
   if (n == null) return '';
   return n >= 0 ? 'text-green' : 'text-red';

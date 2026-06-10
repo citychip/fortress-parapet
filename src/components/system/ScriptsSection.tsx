@@ -1,4 +1,5 @@
 import Card from '../Card';
+import { fmtDateTime } from '../../lib/api';
 
 // ── Script metadata ───────────────────────────────────────────────────────────
 
@@ -79,7 +80,7 @@ function ScriptRow({ script, running, output, onRun }: {
           <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>{script.filename}</span>
             {script.last_run && (
-              <span style={{ fontSize: 11, color: 'var(--muted)' }}>Last: {new Date(script.last_run).toLocaleString()}</span>
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>Last: {fmtDateTime(script.last_run)}</span>
             )}
           </div>
         </div>
