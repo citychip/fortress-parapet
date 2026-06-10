@@ -448,15 +448,19 @@ function EarningsTable({ cal }: { cal: any }) {
                   )}
                 </td>
                 <td className="text-right mono">
-                  {ev?.implied != null ? (
+                  {(e.status === 'no_earnings' || e.status === 'past') ? '—' : !ev ? (
+                    <span style={{ color: 'var(--muted)', fontSize: 11 }}>…</span>
+                  ) : (ev.implied == null && ev.avg == null) ? (
+                    <span style={{ color: 'var(--muted)' }}>—</span>
+                  ) : (
                     <>
-                      <span style={{ color: 'var(--accent)' }}>±{ev.implied.toFixed(1)}%</span>
+                      {ev.implied != null && <span style={{ color: 'var(--accent)' }}>±{ev.implied.toFixed(1)}%</span>}
                       {ev.avg != null && (
-                        <span style={{ color: 'var(--muted)', marginLeft: 6, fontSize: 11 }}>avg ±{ev.avg.toFixed(1)}%</span>
+                        <span style={{ color: 'var(--muted)', marginLeft: ev.implied != null ? 6 : 0, fontSize: 11 }}>
+                          {ev.implied != null ? 'avg ' : ''}±{ev.avg.toFixed(1)}%
+                        </span>
                       )}
                     </>
-                  ) : (e.status === 'no_earnings' || e.status === 'past') ? '—' : (
-                    <span style={{ color: 'var(--muted)', fontSize: 11 }}>…</span>
                   )}
                 </td>
                 <td>
