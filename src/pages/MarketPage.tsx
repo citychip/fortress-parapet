@@ -622,4 +622,88 @@ function IvRankSection({ universe }: { universe: string[] }) {
             <thead><tr>
               <th>Ticker</th>
               <th className="text-right" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')}>
-                IV Rank {sortDir 
+                IV Rank {sortDir === 'desc' ? '▼' : '▲'}
+              </th>
+              <th className="text-right">Current IV</th>
+              <th className="text-right">52w High</th>
+              <th className="text-right">52w Low</th>
+              <th className="text-right">Call IV</th>
+              <th className="text-right">Put IV</th>
+            </tr></thead>
+            <tbody>
+              {sortedUniverse.map(ticker => {
+                const row = rows[ticker];
+                if (row?.status === 'loading') {
+                  const c = loadIvrCache(ticker);
+                  if (!c) return (
+                    <tr key={ticker}>
+                      <td style={{ fontWeight: 600 }}>{ticker}</td>
+                      <td colSpan={6} style={{ color: 'var(--muted)', fontSize: 12 }}>loading…</td>
+                    </tr>
+                  );
+                }
+                if (row?.status === 'error' && !merged[ticker]) {
+                  return (
+                    <tr key={ticker}>
+                      <td style={{ fontWeight: 600 }}>{ticker}</td>
+                      <td colSpan={6} style={{ color: 'var(--red)', fontSize: 12 }}>{row.error}</td>
+                    </tr>
+                  );
+                }
+                const m = merged[ticker];
+                if (!m) return null;
+                const d = m.data;
+                const ivr = d.iv_rank;
+                const ivrColor = ivr == null ? 'var(--muted)'
+                  : ivr >= 50 ? 'var(--green)' : ivr >= 25 ? 'var(--yellow)' : 'var(--muted)';
+                const bias = d.call_iv != null && d.put_iv != null
+                  ? d.call_iv > d.put_iv ? '↑ call' : d.put_iv > d.call_iv ? '↓ put' : '='
+                  : null;
+                const biasColor = bias === '↑ call' ? 'var(--green)' : bias === '↓ put' ? 'var(--red)' : 'var(--muted)';
+                return (
+                  <tr key={ticker} style={{ opacity: m.fromCache ? 0.75 : 1 }}>
+                    <td style={{ fontWeight: 600 }}>
+                      {ticker}
+                      {m.fromCache && m.cacheLabel && (
+                        <span style={{ marginLeft: 6, fontSize: 9, color: 'var(--muted)', fontWeight: 400 }}>
+                          {m.cacheLabel}
+                        </span>
+                      )}
+                    </td>
+                    <td className="text-right mono" style={{ color: ivrColor, fontWeight: 600 }}>
+                      {ivr != null ? ivr.toFixed(1) : '—'}
+                      {ivr != null && ivr >= 25 && <span style={{ marginLeft: 4, fontSize: 10 }}>✓</span>}
+                    </td>
+                    <td className="text-right mono">{d.current_iv != null ? d.current_iv.toFixed(1) + '%' : '—'}</td>
+                    <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_high != null ? d.iv_52w_high.toFixed(1) + '%' : '—'}</td>
+                    <td className="text-right mono" style={{ color: 'var(--muted)' }}>{d.iv_52w_low != null ? d.iv_52w_low.toFixed(1) + '%' : '—'}</td>
+                    <td className="text-right mono" style={{ fontSize: 12, color: 'var(--muted)' }}>{d.call_iv != null ? d.call_iv.toFixed(1) + '%' : '—'}</td>
+                    <td className="text-right mono" style={{ fontSize: 12, color: biasColor }}>{d.put_iv != null ? d.put_iv.toFixed(1) + '%' : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 10 }}>
+            IV Rank ≥ 25 required for new entries (✓). ≥ 50 = prime entry zone.
+            {anyCache && ' · Faded rows show last cached close values.'}
+          </p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ─── KV chip ──────────────────────────────────────────────────────────────────
+
+function KV({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 10, padding: '14px 20px', minWidth: 120,
+    }}>
+      <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: color ?? 'var(--text)', fontFamily: 'monospace' }}>{value}</div>
+    </div>
+  );
+} 
