@@ -238,6 +238,35 @@ export const addJournalEntry   = (body: any) =>
 export const getMarketIntel    = () => req<any>('/api/market-intelligence');
 export const getCalendar       = () => req<any>('/api/calendar');
 export const fetchEarnings     = () => req<any>('/api/calendar/fetch-earnings', { method: 'POST' });
+
+// Macro-event catalyst gate (Strategy §4 binary-event timing). Claude-curated
+// store; backend computes days_until + a defer advisory. Display-only here.
+export interface MacroEvent {
+  label: string;
+  date: string;
+  days_until: number | null;
+  impact: string;            // 'high' | 'medium' | 'low'
+  note?: string | null;
+}
+export interface MacroEventsData {
+  events: MacroEvent[];
+  defer_advisory: boolean;
+  defer_reason?: string | null;
+  nearest_high_impact?: MacroEvent | null;
+  defer_days?: number;
+  updated_at?: string | null;
+  stale?: boolean;
+}
+export const getMacroEvents    = () => req<MacroEventsData>('/api/options/macro-events');
+
+// Order queue: which orders still need a decision (pending/submitted/failed) vs
+// terminal history (expired/declined/filled/cancelled). Shared by the Triage
+// table and the Sidebar badge so the count and the list always agree.
+const ACTIONABLE_ORDER_STATUSES = new Set(['pending', 'submitted', 'failed']);
+export function actionableOrders(payload: any): any[] {
+  const all = [...(payload?.orders ?? []), ...(payload?.pending ?? [])];
+  return all.filter(o => ACTIONABLE_ORDER_STATUSES.has(String(o?.status ?? 'pending').toLowerCase()));
+}
 export const getQuantDataReports = () => req<any>('/api/qd/tools');
 
 export interface IvRankData {

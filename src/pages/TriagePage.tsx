@@ -4,7 +4,7 @@ import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import {
-  getRollAll, getStopLossAll, getAlerts, evaluateRoll, getPendingOrders, getTradeReport,
+  getRollAll, getStopLossAll, getAlerts, evaluateRoll, getPendingOrders, getTradeReport, actionableOrders,
   fmt$, fmtDateTime,
   type AlertData, type OrderData, type TradeReportData,
 } from '../lib/api';
@@ -36,7 +36,7 @@ export default function TriagePage() {
     const [r, s, a, o, tr] = await Promise.allSettled([
       getRollAll(), getStopLossAll(), getAlerts(), getPendingOrders(), getTradeReport(),
     ]);
-    if (o.status === 'fulfilled') setOrders([...(o.value?.orders ?? []), ...(o.value?.pending ?? [])]);
+    if (o.status === 'fulfilled') setOrders(actionableOrders(o.value));
     if (tr.status === 'fulfilled') setReport(tr.value);
     if (r.status === 'fulfilled') {
       setRollData(r.value);
@@ -93,7 +93,7 @@ export default function TriagePage() {
     const id = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       getPendingOrders()
-        .then(o => setOrders([...(o?.orders ?? []), ...(o?.pending ?? [])]))
+        .then(o => setOrders(actionableOrders(o)))
         .catch(() => {});
     }, 15_000);
     return () => clearInterval(id);

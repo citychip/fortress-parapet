@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
-import { getIbkrStatus, getStopLossAll, getPendingOrders, type IbkrStatusData } from '../lib/api';
+import { getIbkrStatus, getStopLossAll, getPendingOrders, actionableOrders, type IbkrStatusData } from '../lib/api';
 
 // badgeKeys link a nav item to live counts. Sprint 13 (#78): pending-orders
 // badge moved from System → Triage, where order status now lives.
@@ -47,8 +47,7 @@ function useOrdersCount() {
   useEffect(() => {
     const load = () => getPendingOrders()
       .then((d: any) => {
-        const n = (d?.orders?.length ?? 0) + (d?.pending?.length ?? 0);
-        setCount(n);
+        setCount(actionableOrders(d).length);   // count only pending/submitted, not terminal history
       })
       .catch(() => {});
     load();

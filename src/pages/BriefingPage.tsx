@@ -10,7 +10,7 @@ import { PositionsCardList } from '../components/positions/PositionCards';
 import { augmentLeg } from '../lib/positions';
 import { useSettings } from '../lib/useSettings';
 import {
-  getBriefing, getPositions, getCandidates, getPendingOrders, getCalendar,
+  getBriefing, getPositions, getCandidates, getPendingOrders, getCalendar, getMacroEvents,
   getMarketIntel, getSpyHedge, getDpFloorsGex, getPcsExposure, getPnl,
   triggerIbkrSync,
   fmt$, fmtPct,
@@ -101,6 +101,7 @@ export default function BriefingPage() {
   const [hedge,       setHedge]       = useState<any>(null);
   const [dpData,      setDpData]      = useState<any>(null);
   const [calendar,    setCalendar]    = useState<any>(null);
+  const [macro,       setMacro]       = useState<any>(null);
   // ── Loading ─────────────────────────────────────────────────────────────────
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
@@ -139,8 +140,8 @@ export default function BriefingPage() {
   }, []);
 
   const loadIntel = useCallback(async () => {
-    const [c, pcs, mi, h, dp, cal] = await Promise.allSettled([
-      getCandidates(), getPcsExposure(), getMarketIntel(), getSpyHedge(), getDpFloorsGex('SPY'), getCalendar(),
+    const [c, pcs, mi, h, dp, cal, me] = await Promise.allSettled([
+      getCandidates(), getPcsExposure(), getMarketIntel(), getSpyHedge(), getDpFloorsGex('SPY'), getCalendar(), getMacroEvents(),
     ]);
     if (c.status === 'fulfilled') {
       const m  = new Map<string, number | null>();
@@ -156,6 +157,7 @@ export default function BriefingPage() {
     if (h.status   === 'fulfilled') setHedge(h.value);
     if (dp.status  === 'fulfilled') setDpData(dp.value);
     if (cal.status === 'fulfilled') setCalendar(cal.value);
+    if (me.status  === 'fulfilled') setMacro(me.value);
   }, []);
 
   const loadAll = useCallback((background = false) => {
@@ -206,7 +208,18 @@ export default function BriefingPage() {
     for (const ev of (intel?.events ?? [])) {
       if (ev?.label) out.push({ label: ev.label, days: ev.days ?? null, tone: 'var(--accent)' });
     }
-    return out.sort((a, b) => (a.days ?? 99) - (b.days ?? 99)).slice(0, 8);
+    // Macro catalyst events (Strategy §4): high-impact within the defer window = red,
+    // other high-impact = amber, lower-impact = muted.
+    const deferDays = macro?.defer_days ?? 2;
+    for (const ev of (macro?.events ?? [])) {
+      if (!ev?.label) continue;
+      const high = String(ev.impact) === 'high';
+      const tone = high
+        ? (ev.days_until != null && ev.days_until <= deferDays ? 'var(--red)' : 'var(--yellow)')
+        : 'var(--muted)';
+      out.push({ label: ev.label, days: ev.days_until ?? null, tone });
+    }
+    return out.sort((a, b) => (a.days ?? 99) - (b.days ?? 99)).slice(0, 10);
   })();
 
   return (
@@ -243,6 +256,14 @@ export default function BriefingPage() {
                 score: {intel.regime.score > 0 ? '+' : ''}{intel.regime.score}
                 {intel.regime.overall ? ` · ${intel.regime.overall}` : ''}
               </span>
+            </div>
+          )}
+
+          {/* ── Catalyst defer advisory (Strategy §4 binary-event timing) ──────── */}
+          {macro?.defer_advisory && (
+            <div style={{ padding: '10px 16px', borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.4)', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
+              <span style={{ color: 'var(--yellow)', fontWeight: 700 }}>⚠ Catalyst defer</span>
+              <span style={{ color: 'var(--muted)', fontSize: 12 }}>{macro.defer_reason || 'High-impact macro event imminent — advisory only (§15.1)'}</span>
             </div>
           )}
 
