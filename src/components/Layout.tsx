@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import Sidebar from './Sidebar';
+import SourceBadge, { useIntegrity, integrityState, headerTint } from './SourceBadge';
 import { getTimeOfDay } from '../lib/api';
 
 function useNarrow(bp = 900) {
@@ -42,6 +43,8 @@ export default function Layout({ title, children, action, onRefresh, loading, la
   const [loc, navigate] = useLocation();
   const narrow = useNarrow();
   const [sideOpen, setSideOpen] = useState(false);
+  const integrity = useIntegrity();
+  const tint = headerTint(integrityState(integrity));
 
   // Close sidebar on navigation when narrow
   useEffect(() => { if (narrow) setSideOpen(false); }, [loc]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -97,6 +100,8 @@ export default function Layout({ title, children, action, onRefresh, loading, la
           display: 'flex', alignItems: 'center', gap: 12,
           background: 'var(--surface)',
           flexShrink: 0,
+          transition: 'background 0.3s ease, border-color 0.3s ease',
+          ...tint,
         }}>
           {narrow && (
             <button
@@ -106,6 +111,7 @@ export default function Layout({ title, children, action, onRefresh, loading, la
             >☰</button>
           )}
           <h1 style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>{title}</h1>
+          <SourceBadge data={integrity} />
           {lastUpdated && (
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>
               {new Date(lastUpdated).toLocaleTimeString()}

@@ -170,6 +170,53 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   return data as T;
 }
 
+// ── Data integrity (gateway-down guard) ──────────────────────────────────────
+// Honest live/fallback/down verdict for the market-data backbone. The backend
+// route live-probes the IBKR gateway rather than trusting the briefing
+// `staleness` field, which lingers "fresh" after the gateway dies. The badge at
+// the top of the UI consumes this so the operator never trades on frozen data.
+export type IntegrityState = 'live' | 'fallback' | 'down' | 'unknown';
+export interface IntegrityData {
+  integrity: IntegrityState;
+  live: boolean;
+  source: 'ibkr' | 'yfinance' | 'none' | string;
+  delayed: boolean;
+  probe_ticker?: string;
+  spot?: number | null;
+  checked_at?: string;
+  message?: string;
+}
+
+// Maps the capability payload to an integrity verdict — used as the fallback
+// when /api/data-integrity isn't deployed yet (active_backend 'web_api' + an
+// authenticated session === live; anything else === gateway down → fallback).
+function integrityFromCapability(s: IbkrStatusData): IntegrityData {
+  const authed = s?.web_api?.session_status?.authenticated === true;
+  const live = authed && s?.active_backend === 'web_api';
+  return {
+    integrity: live ? 'live' : 'fallback',
+    live,
+    source: live ? 'ibkr' : 'yfinance',
+    delayed: !live,
+    message: live
+      ? 'IBKR Web API authenticated — real-time data.'
+      : 'IBKR gateway not authenticated — data is delayed/fallback. Check System → Connections.',
+  };
+}
+
+export const getDataIntegrity = async (): Promise<IntegrityData> => {
+  try {
+    const d = await req<IntegrityData & { error?: string }>('/api/data-integrity');
+    if (d && !d.error && d.integrity) return d;
+  } catch { /* route not deployed yet → fall back to capability */ }
+  try {
+    return integrityFromCapability(await getIbkrStatus());
+  } catch {
+    return { integrity: 'unknown', live: false, source: 'none', delayed: true,
+             message: 'Cannot reach the backend to verify data source.' };
+  }
+};
+
 // ── Briefing / Overview ─────────────────────────────────────────────────────
 export const getBriefing   = () => req<BriefingData>('/api/briefing');
 export const getIbkrStatus = () => req<IbkrStatusData>('/api/ibkr/capability');
