@@ -10,7 +10,8 @@ WINDOWS_SRC="/mnt/c/Users/cityc.000/OneDrive/_Stocks26/2606Fortress/fortress-par
 WSL_DEST="$HOME/fortress-parapet"
 WEBROOT="/var/www/fortress-parapet"
 NGINX_CONF="/etc/nginx/sites-available/fortress-parapet"
-API_TOKEN="07f03fb6e664859ac5e8113eaf1102ac43a3cb785c581af756671072b426db21"
+API_TOKEN=$(cat ~/.fortress_api_token 2>/dev/null) || true
+[ -n "$API_TOKEN" ] || { echo "FATAL: API token not found — create ~/.fortress_api_token (single line, no quotes)"; exit 1; }
 
 echo ""
 echo "╔══════════════════════════════════════╗"
