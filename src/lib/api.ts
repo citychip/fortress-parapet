@@ -428,6 +428,35 @@ export interface PretradeAllData {
   summary?: { proceed?: number; blocked?: number; caution?: number };
 }
 export const getPretradeAll = () => req<PretradeAllData>('/api/manage/pretrade_all');
+
+// Sprint 15.4 — ex-div assignment-risk gate (per short-call leg). Standalone chip.
+export interface ExDivRisk {
+  ticker: string;
+  strike: number;
+  expiry: string;
+  ex_date: string;
+  ex_days_until: number;
+  severity: 'high' | 'watch' | string;
+  note?: string | null;
+}
+export interface ExDivData {
+  assignment_risks?: ExDivRisk[];
+  has_assignment_risk?: boolean;
+}
+export const getExDiv = () => req<ExDivData>('/api/options/ex-div');
+
+// Sprint 15.2 — OTM tradeable short-leg liquidity grade. Standalone chip.
+export interface LiquidityData {
+  ticker?: string;
+  liquidity_grade?: string;          // A | B | C | D
+  tradeable_spread_pct?: number | null;
+  tradeable_status?: 'good' | 'advisory' | 'wide' | string | null;
+  grade_basis?: string | null;
+  source?: string | null;
+}
+export const getCheckLiquidity = (ticker: string) =>
+  req<LiquidityData>(`/api/options/liquidity/${encodeURIComponent(ticker)}`);
+
 export const evaluateRoll   = (ticker: string) =>
   req<any>(`/api/manage/evaluate_roll?ticker=${encodeURIComponent(ticker)}`);
 

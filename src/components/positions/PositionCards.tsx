@@ -63,8 +63,9 @@ function StratRow({ badge, strike, expiry, legs, alert, th }: {
   );
 }
 
-export function TickerSection({ ticker, legs, ivr, iv, th }: {
+export function TickerSection({ ticker, legs, ivr, iv, th, exDivRisk }: {
   ticker: string; legs: any[]; ivr?: number | null; iv?: number | null; th: Thresholds;
+  exDivRisk?: { severity: string; note?: string | null } | null;
 }) {
   const groups     = groupTickerLegs(legs);
   const netDelta   = netOf(legs, 'current_delta');
@@ -78,6 +79,15 @@ export function TickerSection({ ticker, legs, ivr, iv, th }: {
         <span style={{ fontWeight: 700, fontSize: 15, minWidth: 52 }}>{ticker}</span>
         <span style={{ fontSize: 11, color: 'var(--muted)' }}>{legs.length} leg{legs.length !== 1 ? 's' : ''}</span>
         {hasAlert && <span style={{ fontSize: 11, color: 'var(--yellow)', fontWeight: 600 }}>⚠ alert</span>}
+        {/* Sprint 15.4 — ex-div assignment-risk chip on the short-call ticker */}
+        {exDivRisk && (
+          <span title={exDivRisk.note ?? 'Ex-div assignment risk on a short call — roll up/out before ex-div'}
+            style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+              background: exDivRisk.severity === 'high' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.12)',
+              color: exDivRisk.severity === 'high' ? 'var(--red)' : 'var(--yellow)' }}>
+            ⚠ EX-DIV
+          </span>
+        )}
         {nearestDte !== Infinity && (
           <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 10, background: nearestDte <= 7 ? 'rgba(239,68,68,0.15)' : nearestDte <= 14 ? 'rgba(245,158,11,0.12)' : 'rgba(100,116,139,0.08)', color: nearestDte <= 7 ? 'var(--red)' : nearestDte <= 14 ? 'var(--yellow)' : 'var(--muted)', fontWeight: nearestDte <= 14 ? 600 : 400 }}>{nearestDte}d</span>
         )}
@@ -143,8 +153,9 @@ export function TickerSection({ ticker, legs, ivr, iv, th }: {
   );
 }
 
-export function PositionsCardList({ positions, ivrMap, ivMap, settings }: {
+export function PositionsCardList({ positions, ivrMap, ivMap, settings, exDivMap }: {
   positions: any[]; ivrMap?: Map<string, number | null>; ivMap?: Map<string, number | null>; settings?: any;
+  exDivMap?: Map<string, { severity: string; note?: string | null }>;
 }) {
   const th = useThresholds();
   const byTicker = new Map<string, any[]>();
@@ -180,7 +191,7 @@ export function PositionsCardList({ positions, ivrMap, ivMap, settings }: {
         </div>
       )}
       {tickerGroups.map(g => (
-        <TickerSection key={g.ticker} ticker={g.ticker} legs={g.legs} ivr={ivrMap?.get(g.ticker)} iv={ivMap?.get(g.ticker)} th={th} />
+        <TickerSection key={g.ticker} ticker={g.ticker} legs={g.legs} ivr={ivrMap?.get(g.ticker)} iv={ivMap?.get(g.ticker)} th={th} exDivRisk={exDivMap?.get(g.ticker)} />
       ))}
       {settings && (() => {
         const a = settings.alerts ?? {};

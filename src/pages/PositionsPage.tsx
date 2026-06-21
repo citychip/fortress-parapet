@@ -9,7 +9,7 @@ import { PositionsCardList } from '../components/positions/PositionCards';
 import { augmentLeg } from '../lib/positions';
 import { useSettings, useThresholds } from '../lib/useSettings';
 import {
-  getPositions, getSectorExposure, getPortfolioBeta, getCandidates,
+  getPositions, getSectorExposure, getPortfolioBeta, getCandidates, getExDiv,
   getForwardPnl, getPnl, getPnlHistory,
   fmt$, clsN,
   type PositionData, type ForwardPnlData, type PnLData, type BetaData,
@@ -27,6 +27,8 @@ export default function PositionsPage() {
   const [beta, setBeta]           = useState<BetaData | null>(null);
   const [ivrMap, setIvrMap]       = useState<Map<string, number | null>>(new Map());
   const [ivMap, setIvMap]         = useState<Map<string, number | null>>(new Map());
+  // Sprint 15.4 — ex-div assignment risk per ticker (worst severity)
+  const [exDivMap, setExDivMap]   = useState<Map<string, { severity: string; note?: string | null }>>(new Map());
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -51,6 +53,17 @@ export default function PositionsPage() {
         }
         setIvrMap(m); setIvMap(iv);
       }
+      // Ex-div assignment risk (background; keep worst severity per ticker)
+      getExDiv().then(d => {
+        const em = new Map<string, { severity: string; note?: string | null }>();
+        for (const r of (d?.assignment_risks ?? [])) {
+          const cur = em.get(r.ticker);
+          if (!cur || (cur.severity !== 'high' && r.severity === 'high')) {
+            em.set(r.ticker, { severity: r.severity, note: r.note });
+          }
+        }
+        setExDivMap(em);
+      }).catch(() => {});
       setUpdatedAt(new Date().toISOString());
     } catch (e: any) {
       setError(String(e));
@@ -100,7 +113,7 @@ export default function PositionsPage() {
 
       {tab === 'overview' && (
         posLegs.length
-          ? <PositionsCardList positions={posLegs} ivrMap={ivrMap} ivMap={ivMap} settings={settingsCfg} />
+          ? <PositionsCardList positions={posLegs} ivrMap={ivrMap} ivMap={ivMap} settings={settingsCfg} exDivMap={exDivMap} />
           : !loading && <p style={{ color: 'var(--muted)', textAlign: 'center', padding: 60 }}>No open positions.</p>
       )}
       {tab === 'pnl'      && <PnlTab legs={posLegs} />}

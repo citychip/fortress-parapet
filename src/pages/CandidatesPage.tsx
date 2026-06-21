@@ -4,7 +4,7 @@ import Layout from '../components/Layout';
 import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getCandidates, getStrategyMetrics, getPretradeAll, getCapitalEff, getEarningsVolatility, stageOrder, type CandidateRow, type Advisory } from '../lib/api';
+import { getCandidates, getStrategyMetrics, getPretradeAll, getCapitalEff, getEarningsVolatility, getCheckLiquidity, stageOrder, type CandidateRow, type Advisory } from '../lib/api';
 import Badge from '../components/Badge';
 import { useToast } from '../components/Toast';
 
@@ -160,6 +160,8 @@ export default function CandidatesPage() {
   // Sprint 16.1 — advisory caution: ticker → flags[]; + market-wide advisories
   const [cautionMap, setCautionMap]             = useState<Map<string, string[]>>(new Map());
   const [marketAdv, setMarketAdv]               = useState<{ macro_defer?: Advisory; vix_term?: Advisory } | null>(null);
+  // Sprint 15.2 — OTM tradeable short-leg liquidity: ticker → {grade,status,spread}
+  const [liqMap, setLiqMap]                     = useState<Map<string, { grade?: string; status?: string | null; spread?: number | null }>>(new Map());
   // Capital efficiency: ticker → efficiency pct (null if no position)
   const [effMap, setEffMap]                     = useState<Map<string, number | null>>(new Map());
   // Earnings volatility: ticker → { implied_move_pct, avg_historical_pct }
@@ -188,6 +190,27 @@ export default function CandidatesPage() {
     setStrategyLoading(new Set());
   }, []);
 
+  // Sprint 15.2 — fetch OTM tradeable short-leg liquidity for tradeable rows only
+  // (bounded; check_liquidity hits the IBKR chain, so don't fan out to all rows).
+  const fetchLiquidity = useCallback(async (canTradeRows: CandidateRow[]) => {
+    if (!canTradeRows.length) return;
+    const tickers = canTradeRows.map(r => r.ticker);
+    const results = await Promise.allSettled(tickers.map(t => getCheckLiquidity(t)));
+    setLiqMap(prev => {
+      const next = new Map(prev);
+      results.forEach((res, i) => {
+        if (res.status === 'fulfilled') {
+          next.set(tickers[i], {
+            grade:  res.value.liquidity_grade,
+            status: res.value.tradeable_status ?? null,
+            spread: res.value.tradeable_spread_pct ?? null,
+          });
+        }
+      });
+      return next;
+    });
+  }, []);
+
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
     setError(null);
@@ -198,6 +221,7 @@ export default function CandidatesPage() {
       setUpdatedAt(data.as_of ?? new Date().toISOString());
       // Fetch strategy, pretrade, and capital efficiency in background
       fetchStrategies(fetched.filter(r => r.can_trade));
+      fetchLiquidity(fetched.filter(r => r.can_trade));
       // Pretrade gate
       getPretradeAll().then(d => {
         const m = new Map<string, string | null>();
@@ -394,6 +418,14 @@ export default function CandidatesPage() {
                           {cautionMap.get(row.ticker)?.includes('ex_div') && (
                             <Badge tone="yellow" title="Ex-div assignment risk on this ticker's short calls — roll before ex-div">⚠ EX-DIV</Badge>
                           )}
+                          {/* Sprint 15.2 — OTM tradeable short-leg liquidity grade */}
+                          {(() => {
+                            const lq = liqMap.get(row.ticker);
+                            if (!lq?.grade) return null;
+                            const tone = lq.status === 'good' ? 'green' : lq.status === 'wide' ? 'red' : 'yellow';
+                            const sp = lq.spread != null ? ` ${lq.spread}%` : '';
+                            return <Badge tone={tone} title={`OTM short-leg spread ${lq.spread ?? '?'}% (${lq.status ?? 'n/a'}) — grade ${lq.grade}`}>LIQ {lq.grade}{sp}</Badge>;
+                          })()}
                         </div>
                       </td>
                       <td>
