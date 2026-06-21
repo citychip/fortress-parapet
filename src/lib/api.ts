@@ -407,7 +407,27 @@ export interface StopLossAllData {
 export const getTimeOfDay   = () => req<{ group?: string }>('/api/run/time_of_day');
 export const getRollAll     = () => req<RollAllData>('/api/manage/roll_all');
 export const getStopLossAll = () => req<StopLossAllData>('/api/manage/stop_loss_all');
-export const getPretradeAll = () => req<{ results?: Array<{ ticker: string; verdict?: string | null }> }>('/api/manage/pretrade_all');
+// Sprint 16.1 — advisory sub-flags (non-blocking heads-up; separate from the
+// five hard gates). macro_defer/vix_term are market-wide; ex_div is per-ticker.
+export interface Advisory {
+  name: string;
+  level: 'ok' | 'amber' | 'unknown';
+  detail?: string | null;
+  state?: string | null;
+  severity?: string | null;
+}
+export interface PretradeRow {
+  ticker: string;
+  verdict?: string | null;
+  caution?: boolean;
+  caution_flags?: string[];
+}
+export interface PretradeAllData {
+  results?: PretradeRow[];
+  market_advisories?: { macro_defer?: Advisory; vix_term?: Advisory };
+  summary?: { proceed?: number; blocked?: number; caution?: number };
+}
+export const getPretradeAll = () => req<PretradeAllData>('/api/manage/pretrade_all');
 export const evaluateRoll   = (ticker: string) =>
   req<any>(`/api/manage/evaluate_roll?ticker=${encodeURIComponent(ticker)}`);
 

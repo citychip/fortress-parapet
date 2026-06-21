@@ -4,7 +4,8 @@ import Layout from '../components/Layout';
 import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getCandidates, getStrategyMetrics, getPretradeAll, getCapitalEff, getEarningsVolatility, stageOrder, type CandidateRow } from '../lib/api';
+import { getCandidates, getStrategyMetrics, getPretradeAll, getCapitalEff, getEarningsVolatility, stageOrder, type CandidateRow, type Advisory } from '../lib/api';
+import Badge from '../components/Badge';
 import { useToast } from '../components/Toast';
 
 // ── Signal tier ───────────────────────────────────────────────────────────────
@@ -156,6 +157,9 @@ export default function CandidatesPage() {
   const [strategyLoading, setStrategyLoading]   = useState<Set<string>>(new Set());
   // Pretrade: ticker → "PROCEED" | "BLOCKED" | null
   const [pretradeMap, setPretradeMap]           = useState<Map<string, string | null>>(new Map());
+  // Sprint 16.1 — advisory caution: ticker → flags[]; + market-wide advisories
+  const [cautionMap, setCautionMap]             = useState<Map<string, string[]>>(new Map());
+  const [marketAdv, setMarketAdv]               = useState<{ macro_defer?: Advisory; vix_term?: Advisory } | null>(null);
   // Capital efficiency: ticker → efficiency pct (null if no position)
   const [effMap, setEffMap]                     = useState<Map<string, number | null>>(new Map());
   // Earnings volatility: ticker → { implied_move_pct, avg_historical_pct }
@@ -197,8 +201,14 @@ export default function CandidatesPage() {
       // Pretrade gate
       getPretradeAll().then(d => {
         const m = new Map<string, string | null>();
-        for (const r of (d?.results ?? [])) m.set(r.ticker, r.verdict ?? null);
+        const c = new Map<string, string[]>();
+        for (const r of (d?.results ?? [])) {
+          m.set(r.ticker, r.verdict ?? null);
+          if (r.caution && r.caution_flags && r.caution_flags.length) c.set(r.ticker, r.caution_flags);
+        }
         setPretradeMap(m);
+        setCautionMap(c);
+        setMarketAdv(d?.market_advisories ?? null);
       }).catch(() => {});
       // Capital efficiency (existing positions only)
       getCapitalEff().then(d => {
@@ -262,6 +272,21 @@ export default function CandidatesPage() {
         </div>
       )}
       {error && <ErrorBanner msg={error} onRetry={load} />}
+
+      {/* Sprint 16.1 — market-wide advisory banner (macro defer / VIX term).
+          Non-blocking heads-up; ex-div is per-row below. */}
+      {marketAdv && [marketAdv.macro_defer, marketAdv.vix_term]
+        .filter((a): a is Advisory => !!a && a.level === 'amber')
+        .map(a => (
+          <div key={a.name} style={{
+            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+            padding: '8px 12px', borderRadius: 8,
+            background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.30)',
+          }}>
+            <Badge tone="yellow">{a.name === 'macro_defer' ? '⚠ Macro defer' : '⚠ VIX term'}</Badge>
+            <span style={{ color: 'var(--muted)', fontSize: 12 }}>{a.detail || 'Advisory only (§15.1) — non-blocking'}</span>
+          </div>
+        ))}
 
       {/* Summary bar */}
       {rows.length > 0 && (
@@ -362,7 +387,15 @@ export default function CandidatesPage() {
                       <td className="text-right mono" style={{ fontSize: 12, color: Math.abs(row.concentration_pct) > 50 ? 'var(--red)' : Math.abs(row.concentration_pct) > 20 ? 'var(--yellow)' : 'var(--muted)' }}>
                         {row.concentration_pct !== 0 ? `${row.concentration_pct > 0 ? '+' : ''}${row.concentration_pct.toFixed(1)}%` : '—'}
                       </td>
-                      <td><GateBadge row={row} /></td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <GateBadge row={row} />
+                          {/* Sprint 16.1 — per-ticker ex-div caution chip */}
+                          {cautionMap.get(row.ticker)?.includes('ex_div') && (
+                            <Badge tone="yellow" title="Ex-div assignment risk on this ticker's short calls — roll before ex-div">⚠ EX-DIV</Badge>
+                          )}
+                        </div>
+                      </td>
                       <td>
                         {(() => {
                           const v = pretradeMap.get(row.ticker);

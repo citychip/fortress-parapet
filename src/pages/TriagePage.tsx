@@ -5,9 +5,10 @@ import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import {
   getRollAll, getStopLossAll, getAlerts, evaluateRoll, getPendingOrders, getTradeReport, actionableOrders,
-  fmt$, fmtDateTime,
-  type AlertData, type OrderData, type TradeReportData,
+  getPretradeAll, fmt$, fmtDateTime,
+  type AlertData, type OrderData, type TradeReportData, type Advisory,
 } from '../lib/api';
+import Badge from '../components/Badge';
 import { URGENCY_COLOR, URGENCY_BG, VERDICT_COLOR, VERDICT_BG } from '../lib/colors';
 
 // ── Public helper: count ACT signals (used by Sidebar for badge) ──────────────
@@ -23,6 +24,8 @@ export default function TriagePage() {
   const [orders, setOrders]     = useState<OrderData[]>([]);
   const [report, setReport]     = useState<TradeReportData | null>(null);
   const [rollPnl, setRollPnl]   = useState<Map<string, any>>(new Map());
+  // Sprint 16.1 — market-wide advisories (macro defer / VIX term)
+  const [marketAdv, setMarketAdv] = useState<{ macro_defer?: Advisory; vix_term?: Advisory } | null>(null);
   const [loading, setLoading]  = useState(true);
   const [error, setError]      = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -38,6 +41,7 @@ export default function TriagePage() {
     ]);
     if (o.status === 'fulfilled') setOrders(actionableOrders(o.value));
     if (tr.status === 'fulfilled') setReport(tr.value);
+    getPretradeAll().then(d => setMarketAdv(d?.market_advisories ?? null)).catch(() => {});
     if (r.status === 'fulfilled') {
       setRollData(r.value);
       // Load roll P&L estimates in background for urgent/warning positions
@@ -118,6 +122,20 @@ export default function TriagePage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><Spinner size={32} /></div>
       )}
       {error && <ErrorBanner msg={error} onRetry={load} />}
+
+      {/* Sprint 16.1 — market-wide advisory banner (macro defer / VIX term) */}
+      {marketAdv && [marketAdv.macro_defer, marketAdv.vix_term]
+        .filter((a): a is Advisory => !!a && a.level === 'amber')
+        .map(a => (
+          <div key={a.name} style={{
+            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+            padding: '8px 12px', borderRadius: 8,
+            background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.30)',
+          }}>
+            <Badge tone="yellow">{a.name === 'macro_defer' ? '⚠ Macro defer' : '⚠ VIX term'}</Badge>
+            <span style={{ color: 'var(--muted)', fontSize: 12 }}>{a.detail || 'Advisory only (§15.1) — non-blocking'}</span>
+          </div>
+        ))}
 
       {/* ACT summary banner */}
       {actCount > 0 && (
