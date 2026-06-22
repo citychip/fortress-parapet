@@ -5,7 +5,7 @@ import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import {
   getRollAll, getStopLossAll, getAlerts, evaluateRoll, getPendingOrders, getTradeReport, actionableOrders,
-  getPretradeAll, fmt$, fmtDateTime,
+  getPretradeAll, getAllTickerNews, fmt$, fmtDateTime,
   type AlertData, type OrderData, type TradeReportData, type Advisory,
 } from '../lib/api';
 import Badge from '../components/Badge';
@@ -26,6 +26,8 @@ export default function TriagePage() {
   const [rollPnl, setRollPnl]   = useState<Map<string, any>>(new Map());
   // Sprint 16.1 — market-wide advisories (macro defer / VIX term)
   const [marketAdv, setMarketAdv] = useState<{ macro_defer?: Advisory; vix_term?: Advisory } | null>(null);
+  // Sprint 17.4 — per-ticker news-spike cooldown: ticker → {days_since, cooldown_active, headline}
+  const [newsMap, setNewsMap] = useState<Map<string, { days?: number | null; active?: boolean; headline?: string | null }>>(new Map());
   const [loading, setLoading]  = useState(true);
   const [error, setError]      = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -42,6 +44,14 @@ export default function TriagePage() {
     if (o.status === 'fulfilled') setOrders(actionableOrders(o.value));
     if (tr.status === 'fulfilled') setReport(tr.value);
     getPretradeAll().then(d => setMarketAdv(d?.market_advisories ?? null)).catch(() => {});
+    // Sprint 17.4 — per-ticker news-spike cooldown indicator (single call)
+    getAllTickerNews().then(d => {
+      const m = new Map<string, { days?: number | null; active?: boolean; headline?: string | null }>();
+      for (const [tk, n] of Object.entries(d?.tickers ?? {})) {
+        m.set(tk, { days: n.days_since ?? null, active: !!n.cooldown_active, headline: n.headline ?? null });
+      }
+      setNewsMap(m);
+    }).catch(() => {});
     if (r.status === 'fulfilled') {
       setRollData(r.value);
       // Load roll P&L estimates in background for urgent/warning positions
@@ -284,7 +294,18 @@ export default function TriagePage() {
                     const creditColor = credit != null ? (credit >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
                     return (
                     <tr key={i}>
-                      <td style={{ fontWeight: 700 }}>{p.ticker}</td>
+                      <td style={{ fontWeight: 700 }}>
+                        <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+                          {p.ticker}
+                          {/* Sprint 17.4 — news-spike cooldown indicator (§4) */}
+                          {(() => {
+                            const n = newsMap.get(p.ticker);
+                            if (!n || n.days == null) return null;
+                            const title = `${n.headline ? n.headline + ' — ' : ''}last material headline ${n.days}d ago${n.active ? ' (within §4 news cooldown — caution rolling into a fresh catalyst)' : ''}`;
+                            return <Badge tone={n.active ? 'yellow' : 'muted'} title={title}>📰 {n.days}d</Badge>;
+                          })()}
+                        </span>
+                      </td>
                       <td style={{ fontSize: 12, color: 'var(--muted)' }}>{p.strategy ?? '—'}</td>
                       <td style={{ fontSize: 12, color: 'var(--muted)' }}>{p.expiry ?? '—'}</td>
                       <td className="text-right mono" style={{ fontSize: 12 }}>{p.short_strike ?? '—'}</td>

@@ -4,7 +4,7 @@ import Layout from '../components/Layout';
 import Card from '../components/Card';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
-import { getCandidates, getStrategyMetrics, getPretradeAll, getCapitalEff, getEarningsVolatility, getCheckLiquidity, stageOrder, type CandidateRow, type Advisory } from '../lib/api';
+import { getCandidates, getStrategyMetrics, getPretradeAll, getCapitalEff, getEarningsVolatility, getCheckLiquidity, getAllTickerNews, stageOrder, type CandidateRow, type Advisory } from '../lib/api';
 import Badge from '../components/Badge';
 import { useToast } from '../components/Toast';
 
@@ -166,6 +166,8 @@ export default function CandidatesPage() {
   const [effMap, setEffMap]                     = useState<Map<string, number | null>>(new Map());
   // Earnings volatility: ticker → { implied_move_pct, avg_historical_pct }
   const [earnVolMap, setEarnVolMap]             = useState<Map<string, { implied: number | null; avg: number | null }>>(new Map());
+  // Sprint 17.4 — per-ticker news-spike cooldown: ticker → {days_since, cooldown_active, headline}
+  const [newsMap, setNewsMap]                   = useState<Map<string, { days?: number | null; active?: boolean; headline?: string | null }>>(new Map());
 
   const fetchStrategies = useCallback(async (canTradeRows: CandidateRow[]) => {
     if (!canTradeRows.length) return;
@@ -252,6 +254,14 @@ export default function CandidatesPage() {
           }
         }
         setEarnVolMap(m);
+      }).catch(() => {});
+      // Sprint 17.4 — per-ticker news-spike cooldown indicator (single call)
+      getAllTickerNews().then(d => {
+        const m = new Map<string, { days?: number | null; active?: boolean; headline?: string | null }>();
+        for (const [tk, n] of Object.entries(d?.tickers ?? {})) {
+          m.set(tk, { days: n.days_since ?? null, active: !!n.cooldown_active, headline: n.headline ?? null });
+        }
+        setNewsMap(m);
       }).catch(() => {});
     } catch (e: any) {
       setError(String(e));
@@ -425,6 +435,13 @@ export default function CandidatesPage() {
                             const tone = lq.status === 'good' ? 'green' : lq.status === 'wide' ? 'red' : 'yellow';
                             const sp = lq.spread != null ? ` ${lq.spread}%` : '';
                             return <Badge tone={tone} title={`OTM short-leg spread ${lq.spread ?? '?'}% (${lq.status ?? 'n/a'}) — grade ${lq.grade}`}>LIQ {lq.grade}{sp}</Badge>;
+                          })()}
+                          {/* Sprint 17.4 — per-ticker news-spike cooldown indicator (§4) */}
+                          {(() => {
+                            const n = newsMap.get(row.ticker);
+                            if (!n || n.days == null) return null;
+                            const title = `${n.headline ? n.headline + ' — ' : ''}last material headline ${n.days}d ago${n.active ? ' (within §4 news cooldown — size down / defer new entries)' : ''}`;
+                            return <Badge tone={n.active ? 'yellow' : 'muted'} title={title}>📰 {n.days}d</Badge>;
                           })()}
                         </div>
                       </td>

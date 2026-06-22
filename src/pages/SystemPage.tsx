@@ -28,6 +28,7 @@ const SECTION_META: Record<string, { title: string; description: string; icon: s
   trader_profile: { title: 'Trader Profile', description: 'Persona, active strategies, risk tolerance, and primary objective.', icon: '👤' },
   security:       { title: 'Security & API', description: 'API token, QuantData credentials, and authentication keys. Fields are masked — click show to reveal.', icon: '🔐' },
   alerts:         { title: 'Alert Thresholds', description: 'Delta, DTE, and pacing thresholds that drive automated alerts and stop-loss signals.', icon: '🔔' },
+  catalyst:       { title: 'Catalyst Gate', description: 'Binary-event timing (Strategy §4). Macro defer window and per-ticker news-spike cooldown — advisory only, never blocks.', icon: '📅' },
   ibkr:           { title: 'IBKR Settings', description: 'Interactive Brokers connection settings. Auth mode is toggled via Infrastructure tab.', icon: '🏦' },
   system:         { title: 'System', description: 'Data refresh intervals, staleness thresholds, and operational parameters.', icon: '⚙' },
 };

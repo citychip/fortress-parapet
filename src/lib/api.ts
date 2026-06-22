@@ -457,6 +457,24 @@ export interface LiquidityData {
 export const getCheckLiquidity = (ticker: string) =>
   req<LiquidityData>(`/api/options/liquidity/${encodeURIComponent(ticker)}`);
 
+// Sprint 17.4 — per-ticker news-spike cooldown indicator (§4). Standalone chip.
+export interface TickerNews {
+  ticker: string;
+  last_headline_date?: string | null;
+  days_since?: number | null;
+  material?: boolean;
+  headline?: string | null;
+  cooldown_active?: boolean;
+  cooldown_days?: number;
+}
+export interface AllTickerNews {
+  tickers?: Record<string, TickerNews>;
+  cooldown_days?: number;
+  updated_at?: string | null;
+  stale?: boolean;
+}
+export const getAllTickerNews = () => req<AllTickerNews>('/api/market/news');
+
 export const evaluateRoll   = (ticker: string) =>
   req<any>(`/api/manage/evaluate_roll?ticker=${encodeURIComponent(ticker)}`);
 
@@ -508,7 +526,7 @@ export const getSpyHedge       = () => req<any>('/api/manage/spy_hedge_coverage'
 export const getDpFloorsGex    = (ticker: string) => req<any>(`/api/chart/${encodeURIComponent(ticker)}/levels`);
 export const getPcsExposure    = () => req<any>('/api/portfolio/pcs-exposure');
 export const updateSettings    = (section: string, data: any) =>
-  req<any>(`/api/settings/${section}`, { method: 'PATCH', body: JSON.stringify(data) });
+  req<any>(`/api/settings/${section}`, { method: 'PUT', body: JSON.stringify({ values: data }) });
 
 // ── Universe ─────────────────────────────────────────────────────────────────
 export const getUniverse     = () => req<any>('/api/universe');
