@@ -370,7 +370,10 @@ function JournalTab() {
     if (!text) return;
     setPosting(true); setPostErr(null);
     try {
-      await addJournalEntry({ note: text, entry: text });
+      // Free-text decision-log note: send an explicit, schema-valid shape.
+      // action NOTE + GENERAL ticker bypass the §3.4.4 universe gate; note/entry
+      // kept for backend-side description coalescing + older readers.
+      await addJournalEntry({ action: 'NOTE', ticker: 'GENERAL', description: text, notes: text, note: text, entry: text });
       setDraft('');
       await load();
     } catch (e: any) {
